@@ -1,0 +1,8 @@
+/logs/
+/loss_data/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+/datasets/
