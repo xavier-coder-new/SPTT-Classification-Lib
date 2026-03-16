@@ -12,6 +12,11 @@ class Earlystopping:
         self.delta = delta
         
     def __call__(self, val_loss, model, path):
+        # TODO: add nan check for val_loss --- IGNORE ---
+        # if np.isnan(val_loss):
+        #     print("Validation loss is NaN. Skipping early stopping check.")
+        #     return
+
         score = -val_loss
 
         if self.best_score is None:
