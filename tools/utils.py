@@ -74,3 +74,6 @@ def visual_loss(loss, label='loss', name='./pic/loss.pdf'):
     plt.title(f"{label} Curve (per batch)")
     plt.legend()
     plt.savefig(name, bbox_inches='tight')
+    
+
+    
