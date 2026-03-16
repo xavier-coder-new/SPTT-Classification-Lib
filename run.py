@@ -20,7 +20,7 @@ if __name__ == '__main__':
     parser.add_argument('--lr_rate', type=float, default=0.001, required=True, help="learning rate")
     parser.add_argument('--hidden_dim', type=int, default=512, required=True)
     parser.add_argument('--embedding_dim', type=int, default=256, required=True)
-    parser.add_argument('--krank', type=int, default=10, required=True)
+    parser.add_argument('--krank', type=int, default=6, required=True)
     parser.add_argument('--truncate_num', type=int, default=4, required=True)
     parser.add_argument('--truncate_length', type=int, default=100, help='the length of truncated sequence')
     parser.add_argument('--is_training', type=int, default=1, help="status")
@@ -40,7 +40,9 @@ if __name__ == '__main__':
     parser.add_argument('--use_rich', action="store_true", help='whether to use rich logger')
     parser.add_argument("--save", default="logs", help="Log directory")
     parser.add_argument("--threads", type=int, default=4, help="torch CPU threads")
-
+    parser.add_argument("--feature_dim", type=int, default=1, help="feature dimension", required=True)
+    parser.add_argument("--output_dim", type=int, default=1, help="output dimension", required=True)
+    
     args = parser.parse_args()
 
     global_vars.krank = args.krank
