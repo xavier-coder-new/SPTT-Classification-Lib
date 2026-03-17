@@ -10,7 +10,8 @@ import matplotlib.pyplot as plt
 
 def _setup_logger(save_dir: str, args:argparse.Namespace, use_rich: bool = True):
     # Pa_Ep:{args.patience}_{args.max}_LR_{args.rate}_T_{args.truncate}_off_{str(args.off)}
-    full_log_path = Path(save_dir) / args.model / args.data_name / str(args.seed)
+    full_log_path = (Path(save_dir) / args.model / args.data_name / str(args.seed)
+                     / f"krank_{args.krank}_Trun_num_{args.truncate_num}")
     full_log_path.mkdir(parents=True, exist_ok=True)
     
     file_logger = logging.getLogger(f"{args.model}_{args.data_name}_seed{args.seed}__FILE")
@@ -27,8 +28,8 @@ def _setup_logger(save_dir: str, args:argparse.Namespace, use_rich: bool = True)
         
     timestamp = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
     log_filename = (
-        f"train_log-Pa_{args.patience}_Epo_{args.epochs}_"
-        f"LR-{args.learning_rate}_Trun_num-{args.truncate_num}_Trun_len-{args.truncate_length}_off_{str(args.off)}-{timestamp}.log"
+        f"train_log-Pa_{args.patience}_Epo_{args.epochs}_Krank_{args.krank}_"
+        f"LR-{args.lr_rate}_Trun_num-{args.truncate_num}-{timestamp}.log"
     )
     log_file_path = full_log_path / log_filename
     
@@ -75,5 +76,8 @@ def visual_loss(loss, label='loss', name='./pic/loss.pdf'):
     plt.legend()
     plt.savefig(name, bbox_inches='tight')
     
-
-    
+def calculate_accuracy(preds, labels):
+    output = torch.argmax(preds, dim=1) # [batch_size]
+    correct = (output == labels).sum().item()
+    total = labels.size(0)
+    return correct, total
