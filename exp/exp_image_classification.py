@@ -3,7 +3,7 @@ from pathlib import Path
 from exp.exp_basic import Exp_basic
 from data_provider.data_factory import Data_Factory
 import time
-from tools.utils import _setup_logger
+from tools.utils import _setup_logger, calculate_accuracy, visual_loss
 from rich.console import Console
 from tools.TrainProgressDisplay import TrainingProgress
 import torch.nn as nn
@@ -11,6 +11,10 @@ from torch.optim.adam import Adam
 import torch.optim.lr_scheduler as lr_scheduler
 from tools.EarlyStop import Earlystopping
 import math
+import numpy as np
+import pandas as pd
+import os
+from icecream import ic
 
 class Exp_image_classification(Exp_basic):
     def __init__(self, args, device):
@@ -54,7 +58,7 @@ class Exp_image_classification(Exp_basic):
     def _build_export_path(self) -> Path:
         timestamp = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime()) 
         loss_path = (Path("loss_data") / self.args.model / self.args.data_name 
-                     / f"seed_{self.args.seed}" / f"Epoch-{self.args.epochs}_Patience-{self.args.patience}_truncate_num-{self.args.truncate_num}")
+                     / f"seed_{self.args.seed}" / f"krank_{self.args.krank}_Trun_num_{self.args.truncate_num}" / f"Epoch-{self.args.epochs}_Patience-{self.args.patience}")
 
         train_loss_path = loss_path /  f"train_loss=Epoch-{self.args.epochs}_Patience-{self.args.patience}_truncate_num-{self.args.truncate_num}_{timestamp}.csv"
         train_loss_path.parent.mkdir(parents=True, exist_ok=True)
@@ -69,7 +73,7 @@ class Exp_image_classification(Exp_basic):
         visual_vali_loss.parent.mkdir(parents=True, exist_ok=True)
         
         checkpoint_path = (Path("checkpoints") / self.args.model / self.args.data_name 
-                           / f"seed_{self.args.seed}" / f"Epoch-{self.args.epochs}_Patience-{self.args.patience}_truncate_num-{self.args.truncate_num}" 
+                           / f"seed_{self.args.seed}" / f"krank_{self.args.krank}_Trun_num_{self.args.truncate_num}" / f"Epoch-{self.args.epochs}_Patience-{self.args.patience}"
                            / f"checkpoint_{timestamp}.pt")
         checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         
@@ -91,7 +95,7 @@ class Exp_image_classification(Exp_basic):
         else:
             self.permutation = None
             
-        train_loader, vali_loader, test_loader = self._get_loader()
+        train_loader, vali_loader, test_loader = self._get_loader(self.args.data_name)
         (train_loss_path, vali_loss_path, 
          visual_train_loss, visual_vali_loss, 
          checkpoint_path) = self._build_export_path()
@@ -102,10 +106,9 @@ class Exp_image_classification(Exp_basic):
         else:
             raise ValueError("Please set use_rich to True to use rich progress bar")
         
-        model = self._build_model()
-        model.to(self.device)
-        criterion = nn.CrossEntropyLoss().to(self.device)
-        optimizer = Adam(model.parameters(), lr=self.args.lr_rate)
+        self.model.to(self.device)
+        self.criterion = nn.CrossEntropyLoss().to(self.device)
+        optimizer = Adam(self.model.parameters(), lr=self.args.lr_rate)
         scheduler = lr_scheduler.CosineAnnealingLR(
             optimizer=optimizer,
             T_max=self.args.epochs,
@@ -116,11 +119,12 @@ class Exp_image_classification(Exp_basic):
         
         epoch_count = 0
         first_train = True
+        is_nan = False
         
         early_stopping = Earlystopping(patience=self.args.patience, verbose=True)
         
         for epoch in range(self.args.epochs):
-            model.train()
+            self.model.train()
             
             epoch_count += 1
             batch_count = 0
@@ -134,14 +138,20 @@ class Exp_image_classification(Exp_basic):
             # with tqdm(train_loader, desc=f"Epoch {epoch+1}/{self.args.epochs}", unit="batch") as tepoch:
             with training_progress.create_progress_bar("Training") as progress:
                 task_id = progress.add_task(f"Epoch {epoch}", total=len(train_loader))
+                
                 for i, (batch_x, batch_y) in enumerate(train_loader):
                     # batch_x: [batch_size, seq_len, feature_dim]
                     # batch_y: [batch_size]
                     batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
                     batch_size = batch_x.size(0)
-                    # FIXME:
-                    model.model.reset_state(batch_size)
-                    assert torch.all(model.model.hx == 0) and torch.all(model.model.cx == 0), "Hidden state is not reset to zeros at the beginning of each batch"
+                    
+                    # Reset the RNN state and cache logits before each batch starts
+                    self.model.model.reset_state(batch_size)
+                    self.model.reset_logits()
+                    
+                    # Verify that all hidden states and cell states are reset to zeros
+                    assert self.model.model.hx_list is None or all(torch.all(hx == 0) for hx in self.model.model.hx_list), \
+                        "Hidden state is not reset to zeros at the beginning of each batch"
                     
                     batch_count += 1
                     iter_count += 1
@@ -173,40 +183,210 @@ class Exp_image_classification(Exp_basic):
                         # # list of [batch_size, feature_dim], the length of inputs is chunk_T (time steps num)
                         inputs = [chunk_x[:, t, :] for t in range(chunk_T)] 
                         
-                        chunk_actual_length = (actual_length - start).clamp(min=0, max=chunk_T)
+                        # Remaining length (relative to the starting point of the current chunk)
+                        remaining_length = (actual_length - start).clamp(min=0)
+                        chunk_actual_length = remaining_length.clamp(max=chunk_T)
+                        
+                        # Which samples have just ended within the current chunk
+                        end_in_chunked = (remaining_length > 0) & (remaining_length <= chunk_T) # [B]
                         
                         if first_train:
                             print(f"batch_x shape: {batch_x.shape}, chunk_x shape: {chunk_x.shape}")
                             print(f"inputs length: {len(inputs)}")
+                            print(f"chunk_actual_length[:8]: {chunk_actual_length[:8]}")
+                            print(f"end_in_chunk[:8]: {end_in_chunked[:8]}")
                             first_train=False
                             self.chunk_len = chunk_len
                             
                         optimizer.zero_grad()
-                        if end != sequence_length:
-                            # FIXME: 
-                            output = model(
-                                inputs=inputs,
-                                actual_length=chunk_actual_length, 
-                                sequence_length=chunk_T,
-                            )
-                            
-                            loss = criterion(output, batch_y)
-                        else:
-                            assert end == sequence_length, f"end {end} is not equal to sequence_length {sequence_length}"
-                            output_final = model(
-                                inputs=inputs,
-                                actual_length=chunk_actual_length, 
-                                sequence_length=chunk_T,
-                            )
-                            loss = criterion(output_final, batch_y)
-                            model.reset_logits()
                         
-                        sequence_loss += loss
-                        optimizer.step() 
+                        output = self.model(
+                            inputs=inputs,
+                            actual_length=chunk_actual_length,
+                            sequence_length=chunk_T,
+                            ended_in_chunk=end_in_chunked,
+                        )
                         
+                        loss =self.criterion(output, batch_y)
+                        loss.backward()
+                        optimizer.step()
                         
+                        sequence_loss += loss.item()
+                        num_chunks += 1
                         
+                        self.model.model.detach_state()
+                
+                    self.model.reset_logits()
+                    self.model.model.reset_state(batch_size)
                     
+                    batch_loss = sequence_loss / max(1, num_chunks)
+                    epoch_loss.append(batch_loss)
+                    
+                    batch_correct, batch_total = calculate_accuracy(output, batch_y)
+                    batch_acc = batch_correct / batch_total
+                    
+                    epoch_correct_num += batch_correct
+                    epoch_total_num += batch_total
+                
+                    if np.isnan(batch_loss):
+                            print(f"Batch loss is NaN. Batch count: {batch_count}, Iter count: {iter_count}")
+                            self.file_logger.warning(f"Training stopped due to NaN loss at epoch {epoch_count}, batch {batch_count}.")
+                            is_nan = True
+                            break
+                
+                    progress.update(task_id, advance=1, description=f"Epoch {epoch_count} | Loss: {batch_loss:.4f} | Acc: {batch_acc:.4f}")
+                
+                    if batch_count % 20 == 0 or batch_count == 1:
+                        training_progress.print_batch_info(
+                            epoch=epoch,
+                            batch=batch_count,
+                            loss=batch_loss,
+                            acc=batch_acc,
+                            total_batches=len(train_loader)
+                        )    
+                        
+                    self.file_logger.info(f"Epoch {epoch_count}, Batch {batch_count}, Loss: {batch_loss:.4f}, Chunk_num: {num_chunks}, Chunk_length: {chunk_len}, Accuracy: {batch_acc:.4f}")       
+
+                train_loss_data = pd.DataFrame({
+                    "train_loss": epoch_loss,
+                })
+
+                # Append to the csv file
+                if os.path.exists(train_loss_path):
+                    # a: It indicates that the file is opened in append mode. If the file exists, the new data will be appended to the end of the file.
+                    train_loss_data.to_csv(train_loss_path, mode='a', header=False, index=False)
+                else:
+                    # w: It indicates that the file is opened in write mode. If the file does not exist, it will be created. If it exists, it will be overwritten.
+                    train_loss_data.to_csv(train_loss_path, mode='w', header=True, index=False)
+    
+                if is_nan:
+                    ic("NaN loss, stopping training imediately")
+                    break
+            
+                avg_loss = np.average(epoch_loss)
+                epoch_acc = epoch_correct_num / epoch_total_num
+                training_progress.print_epoch_summary(
+                    epoch=epoch_count,
+                    avg_loss=avg_loss,
+                    avg_acc=epoch_acc,
+                    lr=optimizer.param_groups[0]["lr"]
+                )
+                
+                vali_av_loss, vali_acc = self.validate(vali_loader, vali_loss_path)
+            
+                self.file_logger.info(f"-----Epoch {epoch_count}, Average Loss: {avg_loss:.4f}, Train Accuracy: {epoch_acc:.4f}, Validation Accuracy: {vali_acc:.4f} -------")
+            
+                early_stopping(vali_av_loss, self.model, checkpoint_path)
+                
+                scheduler.step()
+                
+                if early_stopping.early_stop:
+                    ic("Early stopping")
+                    
+                    train_loss_pd = pd.read_csv(train_loss_path)
+                    visual_loss(train_loss_pd['train_loss'].tolist(), label="Training Loss", name=visual_train_loss)
+                    
+                    vali_loss_pd = pd.read_csv(vali_loss_path)
+                    visual_loss(vali_loss_pd['vali_loss'].tolist(), label="Validation Loss", name=visual_vali_loss)
+                    
+                    self.file_logger.info(f"Early stopping at epoch {epoch_count}. Best validation loss: {early_stopping.val_loss_min:.4f}")
+                    break
+        
+        return checkpoint_path, test_loader, num_chunks
+    
+    def validate(self, vali_loader, vali_loss_csv_file):
+        self.model.eval()
+        total_loss = []
+        correct_num = 0
+        sample_num = 0
+        
+        with torch.no_grad():
+            for i, (batch_x, batch_y) in enumerate(vali_loader):
+                batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
+                batch_size = batch_x.size(0)
+                sequence_length = batch_x.size(1)
+                actual_length = torch.full(
+                    (batch_size,),
+                    sequence_length,
+                    dtype=torch.int64,
+                    device=self.device,
+                )
+        
+                # for validation, we do not need to reset the state, validation data is not chuncked.
+                self.model.reset_logits()
+                self.model.model.reset_state(batch_size)
+                
+                inputs= [batch_x[:, t, :] for t in range(sequence_length)]
+                
+                output = self.model(
+                    inputs=inputs,
+                    actual_length=actual_length,
+                    sequence_length=sequence_length,
+                    ended_in_chunk=torch.ones(batch_size, dtype=torch.bool, device=self.device) # all samples are considered as ended in the chunk for validation
+                )
+                
+                loss = self.criterion(output, batch_y)
+                total_loss.append(loss.item())
+                
+                batch_correct, batch_total = calculate_accuracy(output, batch_y)
+                batch_acc = batch_correct / batch_total
+                
+                correct_num += batch_correct
+                sample_num += batch_total
+                
+        vali_loss_data = pd.DataFrame({
+            'vali_loss': total_loss
+        })
+            
+        if os.path.exists(vali_loss_csv_file):
+            vali_loss_data.to_csv(vali_loss_csv_file, mode='a', header=False, index=False)
+        else:
+            vali_loss_data.to_csv(vali_loss_csv_file, mode='w', header=True, index=False)
+        
+        vali_acc = correct_num / sample_num
+
+        total_loss = np.average(total_loss)
+        
+        return total_loss, vali_acc
+
+    def test(self, best_model_path, test_loader, num_chunks):
+        self.model.load_state_dict(torch.load(best_model_path, map_location=self.device))
+        self.model.eval()
+        
+        sample_num = 0
+        correct_num = 0
+        
+        with torch.no_grad():
+            for i, (batch_x, batch_y) in enumerate(test_loader):
+                batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
+                batch_size = batch_x.size(0)
+                sequence_length = batch_x.size(1)
+                
+                self.model.reset_logits()
+                self.model.model.reset_state(batch_size)
+                
+                actual_length =torch.full(
+                    (batch_size,),
+                    sequence_length,
+                    dtype=torch.long,
+                    device=self.device,
+                )
+                
+                inputs= [batch_x[:, t, :] for t in range(sequence_length)]
+                output = self.model(
+                    inputs=inputs,
+                    actual_length=actual_length,
+                    sequence_length=sequence_length,
+                    ended_in_chunk=torch.ones(batch_size, dtype=torch.bool, device=self.device) # all samples are considered as ended in the chunk for validation
+                )
+                
+                batch_correct, batch_total = calculate_accuracy(output, batch_y)
+                
+                sample_num += batch_total
+                correct_num += batch_correct
+            
+        test_acc = correct_num / sample_num
+        print("Test Accuracy: ", test_acc, self.chunk_len)
+        self.file_logger.info(f"Test Accuracy: {test_acc:.4f} with chunk length {self.chunk_len} and chunk num {num_chunks}")
 
                     
-            
