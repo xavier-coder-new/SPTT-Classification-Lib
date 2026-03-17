@@ -6,6 +6,8 @@ import time
 from typing import Tuple
 
 timers = Timers()
+
+
 class Model(nn.Module):
     def __init__(self, args):
         super().__init__()
@@ -13,7 +15,7 @@ class Model(nn.Module):
         self.hidden_dim = args.hidden_dim
         self.output_dim = args.output_dim
         self.model = CustomLSTM(args)
-        self.fc = nn.Linear(self.hidden_dim, args.classification_num)
+        self.fc = nn.Linear(self.hidden_dim, self.output_dim)
         # The final logits for caching "completed samples" during stream/block training
         self.final_logits = None
         self.finished_mask = None
@@ -26,6 +28,7 @@ class Model(nn.Module):
         """
         inputs: list of [B, F], the length of inputs is sequence_length (time steps num)
         actual_length: [B], the length of chunck_actual_length for current batch. the range is [0, chunk_T]
+        sequen_length: int, the length of chunk block (chunk_T)
         ended_in_chunk: [B] bool, The final logits for caching "completed samples" during stream/block training
         
         return:
@@ -34,24 +37,42 @@ class Model(nn.Module):
                 - For samples that have already ended: Keep the logits at the end moment and do not change it anymore, 
                 which means these logits will not contribute to the loss and gradient calculation in the following 
                 training of next chunks.
+                
+        current chunk: end_in_chunk -> [True, True, False, False, True]
+        previuos chunk: finished_mask -> [False, False, False, False, True]
+        ~finished_mask -> [True, True, True, True, False]
+        newly_finished -> [True, True, False, False, False]
         
+        The final_logits is continuously filled. Only when the finished samples (the last time steps outputs) will be
+        included in the final_logits, while the unfinished parts remain at 0. The effective_logits is always full, but
+        once an end is reached, the completed part of the final_logits will be transferred to the effective_logits, thus
+        ensuring the freezing of the end part.
+                 
         """
         
-        next_hidden, next_cell = self.model(inputs, actual_length, sequence_length)
-        output = self.fc(next_hidden) # [B, C]
+        top_hidden, next_cell = self.model(
+            inputs=inputs, 
+            chunck_actual_length=actual_length, 
+            chunk_sequence_length=sequence_length
+        )
+        output = self.fc(top_hidden) # [B, C]
         B, C = output.shape
         device = output.device
         
         if self.final_logits is None:
             self.final_logits = torch.zeros(B, C, device=device, dtype=output.dtype)
+            # True for finished, False for unfinished
             self.finished_mask = torch.zeros(B, device=device, dtype=torch.bool)
         
         # For samples that have already ended before the current chunk, we need to keep the logits remain frozen.
         effective_logits = output.clone()
         if self.finished_mask.any():
+            # if there are already finished samples, we need to overwrite the current output of these samples with the previously saved final_logits
+            # make sure the finished samples will not make new logits.
             effective_logits[self.finished_mask] = self.final_logits[self.finished_mask]
         
         # For the newly concluded samples in the current chunk, record and freeze the logits.
+        # Find the "newly ended sample of the current chunk" (previously not ended ∧ currently ended)
         newly_finished = ended_in_chunk & (~self.finished_mask)
         if newly_finished.any():
             self.final_logits[newly_finished] = output[newly_finished]
@@ -60,104 +81,72 @@ class Model(nn.Module):
             
         return effective_logits
 
+
 class CustomLSTM(nn.Module):
     def __init__(self, args):
         super().__init__()
         self.args = args
         self.hidden_dim = args.hidden_dim
         self.feature_dim = args.feature_dim
-        self.krank = args.krank
+        self.num_layers = args.num_layers
         self.device = args.device
         
-        self.w_ih = nn.Parameter(torch.Tensor(4 * self.hidden_dim, self.feature_dim))
-        self.w_hh = nn.Parameter(torch.Tensor(4 * self.hidden_dim, self.hidden_dim))
-        self.b_ih = nn.Parameter(torch.Tensor(4 * self.hidden_dim))
-        self.b_hh = nn.Parameter(torch.Tensor(4 * self.hidden_dim))
+        self.cells =nn.ModuleList()
         
-        self.reset_parameters()
+        for layer_idx in range(self.num_layers):
+            input_dim = self.feature_dim if layer_idx == 0 else self.hidden_dim
+            self.cells.append(
+                CustomLSTMCell(
+                    input_dim=input_dim,
+                    hidden_dim=self.hidden_dim,
+                    device=self.device
+                )
+            )
         
-        self.hx = None
-        self.cx = None
-        
-    def reset_parameters(self):
-        stdv = 1.0 / math.sqrt(self.hidden_dim)
-        for weight in self.parameters():
-            torch.nn.init.uniform_(weight, -stdv, stdv)
+        self.hx_list = None
+        self.cx_list = None
             
     def reset_state(self, batch_size: int):
-        """When starting the training for each batch, the state needs to be reset."""
-        self.hx = torch.zeros(batch_size, self.hidden_dim, device=self.device)
-        self.cx = torch.zeros(batch_size, self.hidden_dim, device=self.device)
-    
+        """
+        When starting the training for each batch, the state needs to be reset.
+        hx_list[layer]: [B, H]
+        cx_list[layer]: [B, H]
+        
+        """
+        self.hx_list = []
+        self.cx_list = []
+        
+        for _ in range(self.num_layers):
+            self.hx_list.append(torch.zeros(batch_size, self.hidden_dim, device=self.device))
+            self.cx_list.append(torch.zeros(batch_size, self.hidden_dim, device=self.device))
+        
+        # self.hx_list = [torch.zeros(batch_size, self.hidden_dim, device=self.device) for _ in range(self.num_layers)]
+        # self.cx_list = [torch.zeros(batch_size, self.hidden_dim, device=self.device) for _ in range(self.num_layers)]
+
     def detach_state(self):
         """When starting the training for each chunk (except the first chunk) in TBPTT, the state needs to be detached."""
-        if self.hx is not None:
-            self.hx = self.hx.detach()
-        if self.cx is not None:
-            self.cx = self.cx.detach()
+        if self.hx_list is not None:
+            self.hx_list = [hx.detach() for hx in self.hx_list]
+        if self.cx_list is not None:
+            self.cx_list = [cx.detach() for cx in self.cx_list]
     
-    def _mask_state_update(self, new_state: torch.Tensor, old_state: torch.Tensor, 
-                           mask: torch.Tensor) -> torch.Tensor:
+    def _mask_state_update(self, new_state: torch.Tensor, old_state: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         """
-        new_state, old_state: tuple of tensors, each shape like [B, H] or
-        [num_layers, B, H].
+        new_state, old_state: tuple of tensors, each shape like [B, H].
         
         mask: [B] (1 means valid, 0 means padded / already ended)
         
-        Example:
-            mask = [1, 1, 0]
-            old_h = [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]] # [B, H]
-            new_h = [[0.7, 0.8], [0.9, 1.0], [1.1, 1.2]] # [B, H]
-            
-            if new_h.dim() == 2:
-                Adjust the shape of the mask to support broadcasting
-                mask = mask.unsqueeze(1) # [B] -> [B, 1]
-                    # To indicate which batches are valid at the current time step, the hidden state of these time steps is updated to new_h
-                    mask_reshaped = [[1], [1], [0]]
-                
-                masked_s = new_h * mask_reshaped + old_h * (1 - mask_reshaped)
-            
-            for sample 1:
-                # masked_h[0] = new_h[0] * 1 + old_h[0] * 0 
-                #             = [0.7, 0.8] * 1 + [0.1, 0.2] * 0
-                #             = [0.7, 0.8]  # 使用新状态
-            
-            for sample 2:
-                # masked_h[1] = new_h[1] * 1 + old_h[1] * 0
-                #             = [0.9, 1.0] * 1 + [0.3, 0.4] * 0
-                #             = [0.9, 1.0]  # 使用新状态
-            
-            for sample 3:
-                # masked_h[2] = new_h[2] * 0 + old_h[2] * 1
-                #             = [1.1, 1.2] * 0 + [0.5, 0.6] * 1
-                #             = [0.5, 0.6]  # 使用旧状态
-                # masked_h[2] = new_h[2] * 0 + old_h[2] * 1
-                #             = [0.5, 0.6]
-        
         """
-        for new_s, old_s in zip(new_state, old_state):
-            # new_s and old_s have shape [B, H] or [num_layers, B, H]
-            # We want to keep new_s where mask=1 and old_s where mask=0
+        if new_state.dim() != 2 or old_state.dim() != 2:
+            raise ValueError(
+                f"Expected [B, H], got new_state={new_state.shape}, old_state={old_state.shape}"
+            )
             
-            # First, we need to reshape mask to be broadcastable to new_s/old_s
-            # If new_s has shape [B, H], we want mask to be [B, 1]
-            # If new_s has shape [num_layers, B, H], we want mask to be [1, B, 1]
-            if new_s.dim() == 2:
-                mask_reshaped = mask.unsqueeze(1).to(self.device)  # [B] -> [B, 1]
-            elif new_s.dim() == 3:
-                mask_reshaped = mask.unsqueeze(0).unsqueeze(2).to(self.device)  # [B] -> [1, B, 1]
-            else:
-                raise ValueError(f"Unexpected state tensor shape: {new_s.shape}")
+        mask = mask.unsqueeze(1).to(device=new_state.device, dtype=new_state.dtype)  # [B, 1]
+        return new_state * mask + old_state * (1.0 - mask)
             
-            # assert new_s.device.type == "cuda", f"Expected new_s to be on CUDA, but got {new_s.device}"
-            # assert old_s.device.type == "cuda", f"Expected old_s to be on CUDA, but got {old_s.device}"
-            # assert mask_reshaped.device.type == "cuda", f"Expected mask_reshaped to be on CUDA, but got {mask_reshaped.device}"
-            
-            masked_s = new_s * mask_reshaped + old_s * (1 - mask_reshaped)
-        
-        return masked_s
-    
-    def forward(self, inputs, actual_length, sequence_length):
+
+    def forward(self, inputs, chunck_actual_length, chunk_sequence_length):
         """
         inputs: list of [batch_size, feature_dim], the length of inputs is sequence_length (time steps num)
         targets: list of [batch_size], the length of targets is sequence_length (time steps num)
@@ -169,27 +158,69 @@ class CustomLSTM(nn.Module):
         """
         # TODO: Add the function of time recording
         
-        self.T = int(sequence_length)
+        if self.hx_list is None or self.cx_list is None:
+            raise RuntimeError("Please call reset_state(batch_size) before forward().")
         
-        if len(inputs) != self.T:
-            raise ValueError(f"Expected {self.T} inputs, got {len(inputs)}")# [B]
+        T = int(chunk_sequence_length)
         
-        for t in range(self.T):
-            self.old_hx, self.old_cx = self.new_hx, self.new_cx
-            x_t = inputs[t]
-            self.new_hx, self.new_cx = LSTMCellFunction.apply(
-                x_t, self.hx, self.cx, self.w_ih, self.w_hh, self.b_ih, self.b_hh
-            )
+        if len(inputs) != T:
+            raise ValueError(f"Expected {T} inputs, got {len(inputs)}")# [B]
+        
+        if (chunck_actual_length < 0).any() or (chunck_actual_length > T).any():
+            raise ValueError(f"actual_length must be in [0, {T}], got {chunck_actual_length}")
+        
+        for t in range(T):
+            valid_mask = (t < chunck_actual_length)
+            # for 0 layer, the input is the original input (B, F); for upper layers, the input is the hidden state of the previous layer.
+            layer_input = inputs[t]
             
-            mask = (t < actual_length).float()
+            for layer_idx in range(self.num_layers):
+                old_h = self.hx_list[layer_idx]
+                old_c = self.cx_list[layer_idx]
+                
+                new_h, new_c = self.cells[layer_idx](
+                    layer_input,
+                    old_h, 
+                    old_c,
+                )
+                
+                masked_h = self._mask_state_update(new_h, old_h, valid_mask)
+                masked_c = self._mask_state_update(new_c, old_c, valid_mask)
+                
+                self.hx_list[layer_idx] = masked_h
+                self.cx_list[layer_idx] = masked_c
+                
+                # current layer output is the next layer input
+                layer_input = masked_h
             
-            self.mask_hx = self._mask_state_update(self.new_hx, self.old_hx, mask)
-            self.mask_cx = self._mask_state_update(self.new_cx, self.old_cx, mask)
+            top_h = self.hx_list[-1]
+            top_c = self.cx_list[-1]
             
-            # for padding samples, the hidden state should not be updated, and the output of these time steps should not contribute to the loss and gradient calculation.
-            end_mask = (t == actual_length - 1)
+        return top_h, top_c
             
-        return self.mask_hx, self.mask_cx, end_mask
+            
+class CustomLSTMCell(nn.Module):
+    def __init__(self, input_dim, hidden_dim, device):
+        super().__init__()
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.device = device
+        
+        self.w_ih = nn.Parameter(torch.Tensor(4 * hidden_dim, input_dim))
+        self.w_hh = nn.Parameter(torch.Tensor(4 * hidden_dim, hidden_dim))
+        self.b_ih = nn.Parameter(torch.Tensor(4 * hidden_dim))
+        self.b_hh = nn.Parameter(torch.Tensor(4 * hidden_dim))
+        
+        self.reset_parameters()
+    
+    def reset_parameters(self):
+        stdv = 1.0 / math.sqrt(self.hidden_dim)
+        for weight in self.parameters():
+            nn.init.uniform_(weight, -stdv, stdv)
+    
+    def forward(self, inputs, hx, cx):
+        return LSTMCellFunction.apply(inputs, hx, cx, self.w_ih, self.w_hh, self.b_ih, self.b_hh)
+
 
 class LSTMCellFunction(torch.autograd.Function):
     @staticmethod
@@ -214,14 +245,14 @@ class LSTMCellFunction(torch.autograd.Function):
         
         inputs, hx, cx, hy, cy, ingate, forgetgate, cellgate, outgate, w_ih, w_hh, b_ih, b_hh = ctx.saved_tensors
         
-        # 计算各门的梯度
+        # calculate gradient for gates
         grad_outgate = grad_hy * torch.tanh(cy) * outgate * (1 - outgate)
         grad_cy = grad_hy * outgate * (1 - torch.tanh(cy) ** 2) + grad_cy
         grad_ingate = grad_cy * cellgate * ingate * (1 - ingate)
         grad_cellgate = grad_cy * ingate * (1 - cellgate ** 2)
         grad_forgetgate = grad_cy * cx * forgetgate * (1 - forgetgate)
         
-        # 计算权重的梯度
+        # calculate gradient for weight
         start_calculate_gradients = time.time()
         grad_w_ih = torch.mm(torch.cat((grad_ingate, grad_forgetgate, grad_cellgate, grad_outgate), 1).t(), inputs)
         grad_w_hh = torch.mm(torch.cat((grad_ingate, grad_forgetgate, grad_cellgate, grad_outgate), 1).t(), hx)
@@ -230,12 +261,13 @@ class LSTMCellFunction(torch.autograd.Function):
         
         timers.update_cal_gradient_time(time_backward)
         
+        # calculate gradient for bias
         grad_b_ih = torch.cat((grad_ingate, grad_forgetgate, grad_cellgate, grad_outgate), 1).sum(0)
         grad_b_hh = torch.cat((grad_ingate, grad_forgetgate, grad_cellgate, grad_outgate), 1).sum(0)
 
+        # calculate gradient for inputs, hx, cx
         grad_inputs = torch.mm(torch.cat((grad_ingate, grad_forgetgate, grad_cellgate, grad_outgate), 1), w_ih)
         grad_hx = torch.mm(torch.cat((grad_ingate, grad_forgetgate, grad_cellgate, grad_outgate), 1), w_hh)
-        
         grad_cx = grad_cy * forgetgate
 
         return grad_inputs, grad_hx, grad_cx, grad_w_ih, grad_w_hh, grad_b_ih, grad_b_hh
