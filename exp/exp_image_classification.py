@@ -196,7 +196,7 @@ class Exp_image_classification(Exp_basic):
                         # Which samples have just ended within the current chunk
                         end_in_chunked = (remaining_length > 0) & (remaining_length <= chunk_T) # [B]
                         
-                        if self.args.model in {"SpttLSTM"}:
+                        if self.args.model in {"SpttLSTM", "SpttGRU"}:
                             self.model.reset_sptt_state(chunk_actual_length)
                         
                         if first_train:
