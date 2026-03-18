@@ -4,21 +4,16 @@ import torch
 
 @dataclass
 class GlobalConfig:
-    time_backward: float = 0.0
-    total_time_block_size: float = 0.0
-    compression_finished: bool = False
     time_block_num: int = 4
     krank: int = 10
     device: str = 'cuda:0'
-    flag: bool = True
-    length_vocab: int = 0
-    pad_idx: int = None
+    slide_window_nums: int = 4
     
     # 类级别的单例
     _instance = None
     
     def __new__(cls):
-        if cls._instance is None:
+        if cls._instance is None: 
             cls._instance = super().__new__(cls)
         return cls._instance
 
