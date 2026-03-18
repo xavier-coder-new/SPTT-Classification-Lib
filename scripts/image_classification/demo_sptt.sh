@@ -2,18 +2,18 @@
 
 export CUDA_VISIBLE_DEVICES=0
 
-model=SpttLSTM
+model=SpttGRU
 data_name=sequential_mnist
 seed=2025
-epochs=1
-patience=1
+epochs=4
+patience=2
 truncate_num=1
 batch_size=128
 learning_rate=0.001
 hidden_dim=512
 embedding_dim=256
 max_length=784
-num_layers=2
+num_layers=1
 krank=1
 # pixel, row
 seq_mode=pixel
