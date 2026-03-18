@@ -6,25 +6,39 @@ class GradientAccumulator:
         self.reset()
     
     def reset(self):
-        self.input = []
+        self.inputs = []
         self.hx = []
         self.delta = []
         self.length = 0
         # print("执行了sbtpca的reset")
     
-    def accumulate(self, input, hx, delta):
-        self.input.append(input)
+    def accumulate(self, inputs, hx, delta):
+        """
+        inputs: [N, input_dim]
+        hx:     [N, hidden_dim]
+        delta:  [N, 4H]
+        """
+        if inputs.numel() == 0:
+            return 
+        
+        self.inputs.append(inputs)
         self.hx.append(hx)
         self.delta.append(delta)
-        self.length += len(input)
-        # 当满足这个判断条件时，表示所有时间步都拼接完了。
-        if self.length >= global_vars.total_time_block_size:
-            global_vars.compression_finished = True
+        self.length += inputs.size(0)
+        # # 当满足这个判断条件时，表示所有时间步都拼接完了。
+        # if self.length >= global_vars.total_time_block_size:
+        #     global_vars.compression_finished = True
         # global_vars.compression_finished = True
         
     def get_concatenated_gradients(self):
-        return torch.cat(self.input, dim=0), torch.cat(self.hx, dim=0), torch.cat(self.delta, dim=0)
-    
+        if self.length == 0:
+            return None, None, None
+        return (
+            torch.cat(self.inputs, dim=0), 
+            torch.cat(self.hx, dim=0), 
+            torch.cat(self.delta, dim=0)
+        )
+
     def save_sbtpca_parameter(self, X_matrix_ih, Sigma_ih, Sigma_matrix_ih, Delta_matrix_ih,
                               X_matrix_hh, Sigma_hh, Sigma_matrix_hh, Delta_matrix_hh):
         
