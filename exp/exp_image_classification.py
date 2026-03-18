@@ -58,22 +58,22 @@ class Exp_image_classification(Exp_basic):
     def _build_export_path(self) -> Path:
         timestamp = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime()) 
         loss_path = (Path("loss_data") / self.args.model / self.args.data_name 
-                     / f"seed_{self.args.seed}" / f"krank_{self.args.krank}_Trun_num_{self.args.truncate_num}" / f"Epoch-{self.args.epochs}_Patience-{self.args.patience}")
+                     / f"seed_{self.args.seed}" / f"krank_{self.args.krank}_Trun_{self.args.truncate_num}_Slide_{self.args.slide_window_nums}" / f"Epoch-{self.args.epochs}_Patience-{self.args.patience}")
 
-        train_loss_path = loss_path /  f"train_loss=Epoch-{self.args.epochs}_Patience-{self.args.patience}_truncate_num-{self.args.truncate_num}_{timestamp}.csv"
+        train_loss_path = loss_path /  f"train_loss=Epoch-{self.args.epochs}_Patience-{self.args.patience}_krank-{self.args.krank}_truncate-{self.args.truncate_num}_slide_{self.args.slide_window_nums}_{timestamp}.csv"
         train_loss_path.parent.mkdir(parents=True, exist_ok=True)
         
-        vali_loss_path = loss_path / f"vali_loss=Epoch-{self.args.epochs}_Patience-{self.args.patience}_truncate_num-{self.args.truncate_num}_{timestamp}.csv"
+        vali_loss_path = loss_path / f"vali_loss=Epoch-{self.args.epochs}_Patience-{self.args.patience}_krank-{self.args.krank}_truncate-{self.args.truncate_num}_slide_{self.args.slide_window_nums}_{timestamp}.csv"
         vali_loss_path.parent.mkdir(parents=True, exist_ok=True)
         
         # visualization paths
-        visual_train_loss = loss_path / f"train_loss=Epoch-{self.args.epochs}_Patience-{self.args.patience}_truncate_num-{self.args.truncate_num}_{timestamp}.svg"
-        visual_vali_loss = loss_path / f"vali_loss=Epoch-{self.args.epochs}_Patience-{self.args.patience}_truncate_num-{self.args.truncate_num}_{timestamp}.svg"
+        visual_train_loss = loss_path / f"train_loss=Epoch-{self.args.epochs}_Patience-{self.args.patience}_krank-{self.args.krank}_truncate-{self.args.truncate_num}_slide_{self.args.slide_window_nums}_{timestamp}.svg"
+        visual_vali_loss = loss_path / f"vali_loss=Epoch-{self.args.epochs}_Patience-{self.args.patience}_krank-{self.args.krank}_truncate-{self.args.truncate_num}_slide_{self.args.slide_window_nums}_{timestamp}.svg"
         visual_train_loss.parent.mkdir(parents=True, exist_ok=True)
         visual_vali_loss.parent.mkdir(parents=True, exist_ok=True)
         
         checkpoint_path = (Path("checkpoints") / self.args.model / self.args.data_name 
-                           / f"seed_{self.args.seed}" / f"krank_{self.args.krank}_Trun_num_{self.args.truncate_num}" / f"Epoch-{self.args.epochs}_Patience-{self.args.patience}"
+                           / f"seed_{self.args.seed}" / f"krank_{self.args.krank}_Trun_{self.args.truncate_num}_Slide_{self.args.slide_window_nums}" / f"Epoch-{self.args.epochs}_Patience-{self.args.patience}"
                            / f"checkpoint_{timestamp}.pt")
         checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         
@@ -176,6 +176,12 @@ class Exp_image_classification(Exp_basic):
                         chunk_len = max(1, chunk_len)
                         
                     for start in range(0, sequence_length, chunk_len):
+                        # cell0 = self.model.model.cells[0]
+                        # print("before chunk:",
+                        #     cell0.X_matrix_ih[0, 0].item(),
+                        #     cell0.Sigma_ih[0].item(),
+                        #     cell0.Delta_matrix_ih[0, 0].item())
+                        
                         end = min(start + chunk_len, sequence_length)
                         chunk_x = batch_x[:, start:end, :] # [batch_size, chunk_len, feature_dim]
                         chunk_T = chunk_x.size(1)
@@ -189,6 +195,9 @@ class Exp_image_classification(Exp_basic):
                         
                         # Which samples have just ended within the current chunk
                         end_in_chunked = (remaining_length > 0) & (remaining_length <= chunk_T) # [B]
+                        
+                        if self.args.model in {"SpttLSTM"}:
+                            self.model.reset_sptt_state(chunk_actual_length)
                         
                         if first_train:
                             print(f"batch_x shape: {batch_x.shape}, chunk_x shape: {chunk_x.shape}")
@@ -209,6 +218,11 @@ class Exp_image_classification(Exp_basic):
                         
                         loss =self.criterion(output, batch_y)
                         loss.backward()
+                        
+                        # print("after update:",
+                        #         cell0.X_matrix_ih[0, 0].item(),
+                        #         cell0.Sigma_ih[0].item(),
+                        #         cell0.Delta_matrix_ih[0, 0].item())
                         optimizer.step()
                         
                         sequence_loss += loss.item()
@@ -216,9 +230,6 @@ class Exp_image_classification(Exp_basic):
                         
                         self.model.model.detach_state()
                 
-                    self.model.reset_logits()
-                    self.model.model.reset_state(batch_size)
-                    
                     batch_loss = sequence_loss / max(1, num_chunks)
                     epoch_loss.append(batch_loss)
                     
@@ -238,7 +249,7 @@ class Exp_image_classification(Exp_basic):
                 
                     if batch_count % 20 == 0 or batch_count == 1:
                         training_progress.print_batch_info(
-                            epoch=epoch,
+                            epoch=epoch_count,
                             batch=batch_count,
                             loss=batch_loss,
                             acc=batch_acc,
