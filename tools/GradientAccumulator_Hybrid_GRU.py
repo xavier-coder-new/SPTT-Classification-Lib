@@ -79,7 +79,7 @@ class GradientAccumulatorGRU:
             torch.cat(self.delta_hhs, dim=0),
         )
 
-    def save_sbtpca_parameter(
+    def save_sptt_parameter(
         self,
         X_matrix_ih,
         Sigma_ih,
@@ -103,7 +103,7 @@ class GradientAccumulatorGRU:
         self.Sigma_matrix_hh = Sigma_matrix_hh
         self.Delta_matrix_hh = Delta_matrix_hh
 
-    def deliver_sbtpca_parameter(self):
+    def deliver_sptt_parameter(self):
         """
         Return persistent low-rank factors for the current GRU layer.
         """

@@ -10,7 +10,7 @@ class GradientAccumulator:
         self.hx = []
         self.delta = []
         self.length = 0
-        # print("执行了sbtpca的reset")
+        # print("执行了sptt的reset")
     
     def accumulate(self, inputs, hx, delta):
         """
@@ -39,7 +39,7 @@ class GradientAccumulator:
             torch.cat(self.delta, dim=0)
         )
 
-    def save_sbtpca_parameter(self, X_matrix_ih, Sigma_ih, Sigma_matrix_ih, Delta_matrix_ih,
+    def save_sptt_parameter(self, X_matrix_ih, Sigma_ih, Sigma_matrix_ih, Delta_matrix_ih,
                               X_matrix_hh, Sigma_hh, Sigma_matrix_hh, Delta_matrix_hh):
         
         self.X_matrix_ih = X_matrix_ih
@@ -52,7 +52,7 @@ class GradientAccumulator:
         self.Sigma_matrix_hh = Sigma_matrix_hh
         self.Delta_matrix_hh = Delta_matrix_hh
         
-    def deliver_sbtpca_parameter(self):
+    def deliver_sptt_parameter(self):
         return self.X_matrix_ih, self.Sigma_ih, self.Sigma_matrix_ih, self.Delta_matrix_ih, \
                self.X_matrix_hh, self.Sigma_hh, self.Sigma_matrix_hh, self.Delta_matrix_hh
     
