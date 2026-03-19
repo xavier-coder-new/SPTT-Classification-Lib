@@ -27,7 +27,7 @@ if __name__ == '__main__':
     # parser.add_argument('--truncate_length', type=int, default=100, help='the length of truncated sequence')
     parser.add_argument('--seed', type=int, default=2025, required=True)
     parser.add_argument('--gpu_type', type=str, default='cuda', help='gpu type') 
-    parser.add_argument('--max_length', type=int, default=400, required=True, help='max text length')
+    parser.add_argument('--max_length', type=int, default=400, help='max text length')
     parser.add_argument('--patience', type=int, default=10, help='early stopping patience')
     parser.add_argument('--checkpoints', type=str, default='./checkpoints/', help='location of model checkpoints')
     parser.add_argument('--need_vali', action="store_true", help='whether to use validation set')
@@ -56,9 +56,9 @@ if __name__ == '__main__':
     
     if args.data_name in {'sequential_mnist', 'cifar10'}:
         exp = Exp_image_classification(args, args.device)
-    elif args.data_name in {'audio'}:
+    elif args.data_name in {'google_speech'}:
         exp = Exp_audio_classification(args, args.device)
-    elif args.data_name in {'text'}:
+    elif args.data_name in {'imdb'}:
         exp = Exp_text_classification(args, args.device)
     else:
         raise ValueError(f"Unsupported Experiment: {args.data_name}")
