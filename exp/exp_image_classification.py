@@ -114,7 +114,7 @@ class Exp_image_classification(Exp_basic):
             T_max=self.args.epochs,
             eta_min=1e-6,
             last_epoch=-1,
-            verbose=False,
+            # verbose=False, # for new versions of PyTorch, the verbose argument is deleted
         )
         
         epoch_count = 0
@@ -196,7 +196,7 @@ class Exp_image_classification(Exp_basic):
                         # Which samples have just ended within the current chunk
                         end_in_chunked = (remaining_length > 0) & (remaining_length <= chunk_T) # [B]
                         
-                        if self.args.model in {"SpttLSTM", "SpttGRU"}:
+                        if self.args.model in {"SpttLSTM", "SpttGRU", "SpttLSTM_End", "SpttGRU_End"}:
                             self.model.reset_sptt_state(chunk_actual_length)
                         
                         if first_train:
