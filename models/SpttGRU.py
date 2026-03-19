@@ -468,8 +468,8 @@ class GRUCellFunction(torch.autograd.Function):
             Sigma_matrix_hh = cell.Sigma_matrix_hh
             Delta_matrix_hh = cell.Delta_matrix_hh
 
-            inv_Sigma_matrix_ih = torch.diag(1.0 / torch.clamp(Sigma_ih, min=1e-6))
-            inv_Sigma_matrix_hh = torch.diag(1.0 / torch.clamp(Sigma_hh, min=1e-6))
+            inv_Sigma_matrix_ih = torch.inverse(Sigma_matrix_ih)
+            inv_Sigma_matrix_hh = torch.inverse(Sigma_matrix_hh)
 
             with torch.no_grad():
                 num_blocks = math.ceil(T / t)
@@ -529,14 +529,11 @@ class GRUCellFunction(torch.autograd.Function):
                     )
                     Sigma_hh = history_factor * Sigma_hh + update_factor * Sigma_hh_product
 
-                    Sigma_ih = torch.clamp(Sigma_ih, min=1e-6)
-                    Sigma_hh = torch.clamp(Sigma_hh, min=1e-6)
-
                     Sigma_matrix_ih = torch.diag(Sigma_ih)
                     Sigma_matrix_hh = torch.diag(Sigma_hh)
 
-                    inv_Sigma_matrix_ih = torch.diag(1.0 / Sigma_ih)
-                    inv_Sigma_matrix_hh = torch.diag(1.0 / Sigma_hh)
+                    inv_Sigma_matrix_ih = torch.inverse(Sigma_matrix_ih)
+                    inv_Sigma_matrix_hh = torch.inverse(Sigma_matrix_hh)
 
             grad_w_ih = (X_matrix_ih @ Sigma_matrix_ih @ Delta_matrix_ih.t()).t()
             grad_w_hh = (X_matrix_hh @ Sigma_matrix_hh @ Delta_matrix_hh.t()).t()
