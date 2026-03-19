@@ -2,11 +2,12 @@
 
 export CUDA_VISIBLE_DEVICES=0
 
-model=SpttGRU
+model=SpttGRU_End
 data_name=sequential_mnist
 seed=2025
 epochs=4
 patience=2
+# for end mode, the truncate_num need to set to 1.
 truncate_num=1
 batch_size=128
 learning_rate=0.001
@@ -18,6 +19,7 @@ krank=1
 # pixel, row
 seq_mode=pixel
 vali_ratio=0.1
+# for end mode, the recommended number of sliding windows is 1
 slide_window_nums=4
 
 # Set dataset-specific parameters
