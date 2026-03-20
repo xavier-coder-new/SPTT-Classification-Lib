@@ -4,6 +4,8 @@ from typing import Literal
 from torch.utils.data import Dataset
 import torchaudio
 from typing import Union
+from torchtext.datasets import IMDB, AG_NEWS
+from torchtext.data.utils import get_tokenizer
 
 class SequentialMNISTDataset(Dataset):
     def __init__(self, path:str, is_train: bool, need_vali: bool, 
@@ -202,6 +204,120 @@ class GoogleSpeechDataset(Dataset):
             "speaker_id": speaker_id,               # str
             "utterance_number": utterance_number,   # int
         }
-        
 
+
+class IMDBDataset(Dataset):
+    def __init__(self, path, split="train", tokenizer_name="basic_english", max_length=None):
+        """
+        Load dataset for IMDB sentiment classification.
         
+        Args:
+            path: dataset cache path
+            split: "train" or "test"
+            tokenizer_name: tokenizer used by torchtext
+            max_length: truncate token length if provided.
+            
+        Returns each sample:
+            {
+                "text": original text,
+                "tokens": list[str],
+                "label": str,       # "pos" or "neg"
+                "label_id": int,    # 0 or 1
+            }
+        """
+        
+        self.path = path
+        self.split = split
+        self.tokenizer = get_tokenizer(tokenizer_name)
+        self.max_length = max_length
+        
+        # torchtext.datasets.IMDB returns iterable samples: (label, text)
+        self.samples = list(IMDB(root=self.path, split=self.split))
+        
+        self.label_to_index = {"neg": 0, "pos": 1}
+        self.index_to_label = {0: "neg", 1: "pos"}
+        
+    def __len__(self):
+        return len(self.samples)
+    
+    def __getitem__(self, index):
+        label, text = self.samples[index]
+        tokens = self.tokenizer(text)
+        
+        if self.max_length is not None:
+            tokens = tokens[:self.max_length]
+            
+        label_id = self.label_to_index[label]
+        
+        return {
+            "text": text,
+            "tokens": tokens,
+            "label": label,
+            "label_id": label_id
+        }
+
+class AGNewsDataset(Dataset):
+    def __init__(
+        self,
+        path,
+        split="train",
+        tokenizer_name="basic_english",
+        max_length=None,
+    ):
+        """
+        Load dataset for AG_NEWS text classification
+
+        Args:
+            path: dataset cache path
+            split: "train" or "test"
+            tokenizer_name: tokenizer used by torchtext
+            max_length: truncate token length if provided
+
+        Returns each sample:
+            {
+                "text": original text,
+                "tokens": list[str],
+                "label": int,         # 1,2,3,4 from torchtext
+                "label_id": int,      # 0,1,2,3
+            }
+        """
+        self.path = path
+        self.split = split
+        self.tokenizer = get_tokenizer(tokenizer_name)
+        self.max_length = max_length
+
+        # torchtext AG_NEWS returns iterable samples: (label, text)
+        self.samples = list(AG_NEWS(root=self.path, split=self.split))
+
+        # 原始标签是 1~4，这里转成 0~3
+        self.label_to_index = {
+            1: 0,  # World
+            2: 1,  # Sports
+            3: 2,  # Business
+            4: 3,  # Sci/Tech
+        }
+        self.index_to_label = {
+            0: "World",
+            1: "Sports",
+            2: "Business",
+            3: "Sci/Tech",
+        }
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, index):
+        label, text = self.samples[index]
+        tokens = self.tokenizer(text)
+
+        if self.max_length is not None:
+            tokens = tokens[:self.max_length]
+
+        label_id = self.label_to_index[label]
+
+        return {
+            "text": text,
+            "tokens": tokens,
+            "label": label,
+            "label_id": label_id,
+        }
