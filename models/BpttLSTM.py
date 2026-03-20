@@ -14,6 +14,25 @@ class Model(nn.Module):
         self.args = args
         self.hidden_dim = args.hidden_dim
         self.output_dim = args.output_dim
+        
+        # judge the type of input data.
+        self.input_type = getattr(args, "input_type", "feature")
+        if self.input_type == "text":
+            self.vocab_size = args.vocab_size
+            self.embed_dim = args.embed_dim
+            self.pad_idx = getattr(args, "pad_idx", None)
+
+            self.embedding = nn.Embedding(
+                num_embeddings=self.vocab_size,
+                embedding_dim=self.embed_dim,
+                padding_idx=self.pad_idx,
+            )
+
+            rnn_input_dim = self.embed_dim
+        else:
+            self.embedding = None
+            rnn_input_dim = args.feature_dim
+        
         self.model = CustomLSTM(args)
         self.fc = nn.Linear(self.hidden_dim, self.output_dim)
         # The final logits for caching "completed samples" during stream/block training
