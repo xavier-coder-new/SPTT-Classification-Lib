@@ -24,31 +24,45 @@ class Exp_text_classification(Exp_basic):
     
     # /home/leo/breeze/NMI/code/uoro_pytorch/datasets
     def _get_loader(self, data_name, path="./datasets"):
-        if data_name == "sequential_mnist":
-            path = "/home/leo/breeze/NMI/code/uoro_pytorch/datasets"
-        
         data_loader = Data_Factory(path=Path(path), num_worker=self.args.num_worker)
-        if data_name == "sequential_mnist":
-            train_loader, vali_loader = data_loader.get_data_loader(
-                data_name=self.args.data_name,
-                mode="train", 
-                batch_size=self.args.batch_size,
-                need_vali=self.args.need_vali, 
-                vali_ratio=self.args.vali_ratio,
-                split_seed=self.args.seed,
-                seq_mode=self.args.seq_mode, 
-                permute=self.args.permute, 
-                permutation=self.permutation if self.args.permute else None
-            )
-            
-            test_loader = data_loader.get_data_loader(
-                data_name=self.args.data_name,
-                mode="test",
-                need_vali=False,
-                seq_mode=self.args.seq_mode,
-                permute=self.args.permute,
-                permutation=self.permutation if self.args.permute else None
-            )
+        train_loader = data_loader.get_data_loader(
+            data_name=data_name,
+            mode="train", 
+            batch_size=self.args.batch_size,
+            need_vali=self.args.need_vali,
+            vali_ratio=self.args.vali_ratio,
+            split_seed=self.args.seed,
+            download=True,
+            max_length=self.args.max_length,
+            min_freq=self.args.min_freq,
+            fixed_length=self.args.fixed_length,
+            length_mode=self.args.length_mode,
+        )
+        vali_loader = data_loader.get_data_loader(
+            data_name=data_name,
+            mode="vali",
+            batch_size=self.args.batch_size,
+            need_vali=self.args.need_vali,
+            vali_ratio=self.args.vali_ratio,
+            split_seed=self.args.seed,
+            download=True,
+            max_length=self.args.max_length,
+            min_freq=self.args.min_freq,
+            fixed_length=self.args.fixed_length,
+            length_mode=self.args.length_mode,
+        )
+        test_loader = data_loader.get_data_loader(
+            data_name=data_name,
+            mode="test",
+            batch_size=self.args.batch_size,
+            need_vali=False,
+            download=True,
+            max_length=self.args.max_length,
+            min_freq=self.args.min_freq,
+            fixed_length=self.args.fixed_length,
+            length_mode=self.args.length_mode,
+        )
+        
         return train_loader, vali_loader, test_loader
         
     def _build_model(self):
@@ -83,17 +97,6 @@ class Exp_text_classification(Exp_basic):
     def train(self):
         self.file_logger, self.console_logger = _setup_logger(self.args.save, self.args, use_rich=self.args.use_rich)
         self.file_logger.info(f"Starting training with args: {self.args}")
-        
-        if self.args.permute:
-            if self.args.data_name == "sequential_mnist":
-                self.permutation = torch.randperm(784)
-            elif self.args.data_name == "cifar10":
-                # XXX: 
-                self.permutation = torch.randperm(32*32*3)
-            else:
-                raise ValueError(f"{self.args.data_name} is not supported")
-        else:
-            self.permutation = None
             
         train_loader, vali_loader, test_loader = self._get_loader(self.args.data_name)
         (train_loss_path, vali_loss_path, 
@@ -114,7 +117,7 @@ class Exp_text_classification(Exp_basic):
             T_max=self.args.epochs,
             eta_min=1e-6,
             last_epoch=-1,
-            verbose=False,
+            # verbose=False, # for new versions of PyTorch, the verbose argument is deleted
         )
         
         epoch_count = 0
@@ -139,10 +142,16 @@ class Exp_text_classification(Exp_basic):
             with training_progress.create_progress_bar("Training") as progress:
                 task_id = progress.add_task(f"Epoch {epoch}", total=len(train_loader))
                 
-                for i, (batch_x, batch_y) in enumerate(train_loader):
+                for i, batch in enumerate(train_loader):
                     # batch_x: [batch_size, seq_len, feature_dim]
                     # batch_y: [batch_size]
-                    batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
+                    batch_x = batch['input_ids'].to(self.device) # [B, T_max, n_mels]
+                    sequence_length = batch_x.size(1) # T_max
+                    actual_length = batch['lengths'].to(self.device) # [B]
+                    labels = batch['label_id'].to(self.device) # [B]
+                    
+                    batch_x, batch_y = batch_x.to(self.device), labels.to(self.device)
+
                     batch_size = batch_x.size(0)
                     
                     # Reset the RNN state and cache logits before each batch starts
@@ -158,14 +167,6 @@ class Exp_text_classification(Exp_basic):
                     
                     num_chunks = 0
                     sequence_loss = 0.0
-                    
-                    sequence_length = batch_x.size(1)
-                    actual_length = torch.full(
-                        (batch_x.size(0),),
-                        sequence_length,
-                        dtype=torch.long,
-                        device=self.device,
-                    )
                     
                     if self.args.truncate_num == 1:
                         chunk_len = sequence_length
@@ -196,7 +197,7 @@ class Exp_text_classification(Exp_basic):
                         # Which samples have just ended within the current chunk
                         end_in_chunked = (remaining_length > 0) & (remaining_length <= chunk_T) # [B]
                         
-                        if self.args.model in {"SpttLSTM"}:
+                        if self.args.model in {"SpttLSTM", "SpttGRU", "SpttLSTM_End", "SpttGRU_End"}:
                             self.model.reset_sptt_state(chunk_actual_length)
                         
                         if first_train:
@@ -312,16 +313,14 @@ class Exp_text_classification(Exp_basic):
         sample_num = 0
         
         with torch.no_grad():
-            for i, (batch_x, batch_y) in enumerate(vali_loader):
-                batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
+            for i, batch in enumerate(vali_loader):
+                batch_x = batch['input_ids'].to(self.device)
+                sequence_length = batch_x.size(1) # [B, T_max, n_mels]
+                actual_length = batch['lengths'].to(self.device)
+                labels = batch['label_id'].to(self.device)
+                
+                batch_x, batch_y = batch_x.to(self.device), labels.to(self.device)
                 batch_size = batch_x.size(0)
-                sequence_length = batch_x.size(1)
-                actual_length = torch.full(
-                    (batch_size,),
-                    sequence_length,
-                    dtype=torch.int64,
-                    device=self.device,
-                )
         
                 # for validation, we do not need to reset the state, validation data is not chuncked.
                 self.model.reset_logits()
@@ -368,20 +367,17 @@ class Exp_text_classification(Exp_basic):
         correct_num = 0
         
         with torch.no_grad():
-            for i, (batch_x, batch_y) in enumerate(test_loader):
-                batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
+            for i, batch in enumerate(test_loader):
+                batch_x = batch['features'].to(self.device)
+                sequence_length = batch_x.size(1) # [B, T_max, n_mels]
+                actual_length = batch['lengths'].to(self.device)
+                labels = batch['label_id'].to(self.device)
+                
+                batch_x, batch_y = batch_x.to(self.device), labels.to(self.device)
                 batch_size = batch_x.size(0)
-                sequence_length = batch_x.size(1)
                 
                 self.model.reset_logits()
                 self.model.model.reset_state(batch_size)
-                
-                actual_length =torch.full(
-                    (batch_size,),
-                    sequence_length,
-                    dtype=torch.long,
-                    device=self.device,
-                )
                 
                 inputs= [batch_x[:, t, :] for t in range(sequence_length)]
                 output = self.model(
