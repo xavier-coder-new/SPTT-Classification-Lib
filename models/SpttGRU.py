@@ -528,6 +528,14 @@ class GRUCellFunction(torch.autograd.Function):
                         dim=0,
                     )
                     Sigma_hh = history_factor * Sigma_hh + update_factor * Sigma_hh_product
+                    
+                    # XXX:
+                    Sigma_ih = torch.where(Sigma_ih == 0, torch.ones_like(Sigma_ih), Sigma_ih)
+                    Sigma_hh = torch.where(Sigma_hh == 0, torch.ones_like(Sigma_hh), Sigma_hh)
+                    
+                    # XXX：
+                    Sigma_ih = torch.nan_to_num(Sigma_ih, nan=1.0)
+                    Sigma_hh = torch.nan_to_num(Sigma_hh, nan=1.0)
 
                     Sigma_matrix_ih = torch.diag(Sigma_ih)
                     Sigma_matrix_hh = torch.diag(Sigma_hh)
