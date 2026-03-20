@@ -456,7 +456,7 @@ class LSTMCellFunction(torch.autograd.Function):
                     
                     block_len = activation_input.size(0)
                     if block_len == 0:
-                        continue
+                        raise ValueError("block_len is 0")
                                         
                     scale_factor_right_ih = delta_block @ Delta_matrix_ih / block_len
                     scale_factor_left_ih = activation_input @ X_matrix_ih / block_len
