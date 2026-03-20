@@ -30,19 +30,19 @@ class Exp_audio_classification(Exp_basic):
         # HACK: for server, the path is different.
         data_loader = Data_Factory(path=Path(path), num_worker=self.args.num_worker)
         train_loader = data_loader.get_data_loader(
-            data_name="google_speech",
+            data_name=data_name,
             mode="train", 
             batch_size=self.args.batch_size,
             download=True,
         )
         vali_loader = data_loader.get_data_loader(
-            data_name="google_speech",
+            data_name=data_name,
             mode="vali",
             batch_size=self.args.batch_size,
             download=True,
         )
         test_loader = data_loader.get_data_loader(
-            data_name="google_speech",
+            data_name=data_name,
             mode="test",
             batch_size=self.args.batch_size,
             download=True,
