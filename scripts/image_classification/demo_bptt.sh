@@ -13,7 +13,7 @@ learning_rate=0.001
 hidden_dim=512
 embedding_dim=256
 max_length=784
-num_layers=2
+num_layers=1
 krank=1
 # pixel, row
 seq_mode=pixel
