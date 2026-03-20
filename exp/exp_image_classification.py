@@ -29,23 +29,39 @@ class Exp_image_classification(Exp_basic):
         
         data_loader = Data_Factory(path=Path(path), num_worker=self.args.num_worker)
         if data_name == "sequential_mnist":
-            train_loader, vali_loader = data_loader.get_data_loader(
-                data_name=self.args.data_name,
+            train_loader = data_loader.get_data_loader(
+                data_name=data_name,
                 mode="train", 
                 batch_size=self.args.batch_size,
                 need_vali=self.args.need_vali, 
                 vali_ratio=self.args.vali_ratio,
                 split_seed=self.args.seed,
-                seq_mode=self.args.seq_mode, 
+                seq_mode=self.args.seq_mode,
+                download=True, 
                 permute=self.args.permute, 
                 permutation=self.permutation if self.args.permute else None
             )
             
+            vali_loader = data_loader.get_data_loader(
+                data_name=data_name,
+                mode="vali",
+                batch_size=self.args.batch_size,
+                need_vali=self.args.need_vali, 
+                vali_ratio=self.args.vali_ratio,
+                split_seed=self.args.seed,
+                seq_mode=self.args.seq_mode, 
+                download=True,
+                permute=self.args.permute, 
+                permutation=self.permutation if self.args.permute else None
+            )
+
             test_loader = data_loader.get_data_loader(
-                data_name=self.args.data_name,
+                data_name=data_name,
                 mode="test",
+                batch_size=self.args.batch_size,
                 need_vali=False,
                 seq_mode=self.args.seq_mode,
+                download=True,
                 permute=self.args.permute,
                 permutation=self.permutation if self.args.permute else None
             )
