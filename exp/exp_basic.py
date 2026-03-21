@@ -15,8 +15,7 @@ class Exp_basic:
             'SpttGRU_End': SpttGRU_End,
         }
         self.device = self._acquire_device()
-        # XXX:
-        self.model = self._build_model().to(self.device)
+        # self.model = self._build_model().to(self.device)
         
     def _build_model(self):
         """Subclasses must implement this method"""

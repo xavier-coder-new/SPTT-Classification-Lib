@@ -84,6 +84,8 @@ class Exp_audio_classification(Exp_basic):
         self.file_logger.info(f"Starting training with args: {self.args}")
             
         train_loader, vali_loader, test_loader = self._get_loader(self.args.data_name)
+        self.model = self._build_model().to(self.device)
+        
         (train_loss_path, vali_loss_path, 
          visual_train_loss, visual_vali_loss, 
          checkpoint_path) = self._build_export_path()
