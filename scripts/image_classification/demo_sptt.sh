@@ -4,12 +4,12 @@ export CUDA_VISIBLE_DEVICES=0
 
 model=SpttLSTM
 data_name=sequential_mnist
-seed=2023
+seed=2025
 epochs=500
 patience=30
 truncate_num=1
 batch_size=256
-learning_rate=0.01
+learning_rate=0.005
 hidden_dim=512
 embedding_dim=256
 max_length=784

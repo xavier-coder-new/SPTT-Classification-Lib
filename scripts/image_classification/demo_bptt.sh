@@ -5,10 +5,10 @@ export CUDA_VISIBLE_DEVICES=0
 model=BpttLSTM
 data_name=sequential_mnist
 seed=2025
-epochs=100
-patience=10
+epochs=500
+patience=30
 truncate_num=1
-batch_size=128
+batch_size=256
 learning_rate=0.001
 hidden_dim=512
 embedding_dim=256
@@ -18,7 +18,7 @@ krank=1
 # pixel, row
 seq_mode=pixel
 vali_ratio=0.1
-slide_window_nums=4
+slide_window_nums=1
 
 # Set dataset-specific parameters
 if [[ "$data_name" = "sequential_mnist" ]]; then
