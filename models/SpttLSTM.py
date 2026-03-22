@@ -502,6 +502,11 @@ class LSTMCellFunction(torch.autograd.Function):
                     Sigma_ih = torch.where(Sigma_ih == 0, torch.ones_like(Sigma_ih), Sigma_ih)
                     Sigma_hh = torch.where(Sigma_hh == 0, torch.ones_like(Sigma_hh), Sigma_hh)
                     
+                    # XXX：
+                    Sigma_ih = torch.nan_to_num(Sigma_ih, nan=1.0)
+                    Sigma_hh = torch.nan_to_num(Sigma_hh, nan=1.0)
+                    # ic(Sigma_ih)
+                    
                     # 在计算完成后、更新梯度前应用对数缩放
                     Sigma_matrix_ih = torch.diag(Sigma_ih)
                     Sigma_matrix_hh = torch.diag(Sigma_hh)
