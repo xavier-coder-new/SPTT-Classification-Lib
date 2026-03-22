@@ -111,13 +111,13 @@ class Data_Factory:
         vocab = build_vocab_from_iterator(
             yield_tokens(),
             min_freq=min_freq,
-            special_tokens=special_tokens,
+            specials=special_tokens,
             special_first=True,  # Ensure special tokens are at the beginning of the vocabulary
         )
         
         vocab.set_default_index(vocab["<unk>"])
         self.imdb_vocab = vocab        
-        self.imdb_pad_idx = vocab["<pad>"]
+        self.imdb_pad_idx = vocab["<pad>"] # return index of <pad> token, int
         self.imdb_unk_idx = vocab["<unk>"]
     
     def imdb_collate_fn(self, batch):
@@ -148,7 +148,7 @@ class Data_Factory:
                 
                 "lengths": tensor([4, 2, 3]),           # Each sentence's true length
                 "label_id": tensor([1, 0, 1]),          # Label ID
-                "label": ["positive", "negative", "positive"],  # Label name
+                "label": ["pos", "neg", "pos"],  # Label name
                 "text": ["This movie is great", "Terrible film", "I love it"]  # Original text
             }
             
@@ -168,7 +168,7 @@ class Data_Factory:
                 {
                     "text": str,           # original text
                     "tokens": list[str],   # list of tokenized words
-                    "label": str,          # label name (e.g., "positive", "negative")
+                    "label": str,          # label name (e.g., "pos", "neg")
                     "label_id": int        # label ID (e.g., 0, 1)
                 }
             """
