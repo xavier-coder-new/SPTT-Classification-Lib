@@ -12,15 +12,12 @@ truncate_num=1
 batch_size=128
 learning_rate=0.001
 hidden_dim=512
-embedding_dim=256
-max_length=784
+embed_dim=256
 num_layers=1
 krank=7
-# pixel, row
-seq_mode=pixel
-vali_ratio=0.1
 # for end mode, the recommended number of sliding windows is 1
-slide_window_nums=4
+slide_window_nums=1
+exp_type=audio
 
 # Set dataset-specific parameters
 if [[ "$data_name" = "google_speech" ]]; then
@@ -37,7 +34,7 @@ python -m run \
     --epochs $epochs \
     --lr_rate $learning_rate \
     --hidden_dim $hidden_dim \
-    --embedding_dim $embedding_dim \
+    --embed_dim $embed_dim \
     --krank $krank \
     --truncate_num $truncate_num \
     --seed $seed \
@@ -47,4 +44,5 @@ python -m run \
     --num_layers $num_layers \
     --use_rich \
     --slide_window_nums $slide_window_nums \
+    --exp_type=$exp_type \
 

@@ -3,7 +3,7 @@
 export CUDA_VISIBLE_DEVICES=0
 
 models=("SpttLSTM" "BpttLSTM" "SpttLSTM_End" "SpttGRU" "BpttGRU" "SpttGRU_End")
-data_names=("sequential_mnist")
+data_names=("imdb" "ag_news")
 seeds=(2020 2021 2022 2023 2024 2025)
 epochs=300
 patience=30
@@ -25,10 +25,10 @@ args=(
     "$slide_window_nums"
 )
 
-for data_name in "${data_names[@]}"; do
-  for seed in "${seeds[@]}"; do
+for seed in "${seeds[@]}"; do
+  for data_name in "${data_names[@]}"; do
     for model in "${models[@]}"; do
-        job_name="image_classification---${model}---${data_name}---${seed}"
+        job_name="text_classification---${model}---${data_name}---${seed}"
         echo "--------------------------------------------------------------"
         echo "Running job: ${job_name}"
         echo "Truncate Num: ${truncate_num}"
@@ -45,7 +45,7 @@ for data_name in "${data_names[@]}"; do
             "$slide_window_nums"
         )
 
-        ./scripts/image_classification/test.sh "${args[@]}"
+        ./scripts/text_classification/test.sh "${args[@]}"
 
         echo "--------------------------------------------------------------"
         echo "Finished job: ${job_name}"
