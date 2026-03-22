@@ -193,8 +193,8 @@ class CustomLSTM(nn.Module):
                 # current layer output is the next layer input
                 layer_input = masked_h
             
-            top_h = self.hx_list[-1]
-            top_c = self.cx_list[-1]
+        top_h = self.hx_list[-1]
+        top_c = self.cx_list[-1]
             
         return top_h, top_c
             
