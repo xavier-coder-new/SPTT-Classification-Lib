@@ -2,34 +2,30 @@
 
 export CUDA_VISIBLE_DEVICES=0
 
-model=SpttLSTM_End
-data_name=ag_news
-seed=2025
-epochs=1
-patience=1
-truncate_num=1
-batch_size=128
-learning_rate=0.001
+model=$1
+data_name=$2
+seed=$3
+epochs=$4
+patience=$5
+# for end mode, the truncate_num need to set to 1.
+truncate_num=$6
+batch_size=$7
+learning_rate=$8
 hidden_dim=512
 embed_dim=256
-num_layers=1
-krank=7
+num_layers=$9
+krank="${10}"
 # pixel, row
+seq_mode=pixel
 vali_ratio=0.1
-exp_type=text
-slide_window_nums=1
-# pad, repeat
-length_mode=pad
+# for end mode, the recommended number of sliding windows is 1
+slide_window_nums="${11}"
+exp_type=image
 
-if [[ "$data_name" = "imdb" ]]; then
-    batch_size=128
-    feature_dim=$embed_dim
-    output_dim=2
-    need_vali=True
-elif [[ "$data_name" = "ag_news" ]]; then
-    batch_size=256
-    feature_dim=$embed_dim
-    output_dim=4
+# Set dataset-specific parameters
+if [[ "$data_name" = "sequential_mnist" ]]; then
+    feature_dim=1
+    output_dim=10
     need_vali=True
 fi
 
@@ -49,14 +45,14 @@ if [ "$need_vali" = "True" ]; then
         --seed $seed \
         --patience $patience \
         --vali_ratio $vali_ratio \
+        --seq_mode $seq_mode \
         --feature_dim $feature_dim \
         --output_dim $output_dim \
         --num_layers $num_layers \
         --use_rich \
         --permute \
         --slide_window_nums $slide_window_nums \
-        --exp_type $exp_type \
-        --length_mode $length_mode \
+        --exp_type=$exp_type \
         --need_vali 
 else
     python -m run \
@@ -73,12 +69,12 @@ else
         --seed $seed \
         --patience $patience \
         --vali_ratio $vali_ratio \
+        --seq_mode $seq_mode \
         --feature_dim $feature_dim \
         --output_dim $output_dim \
         --num_layers $num_layers \
         --use_rich \
         --slide_window_nums $slide_window_nums \
-        --exp_type $exp_type \
-        --length_mode $length_mode \
+        --exp_type=$exp_type \
         --permute 
 fi

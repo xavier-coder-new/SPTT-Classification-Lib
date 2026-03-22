@@ -21,13 +21,13 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', type=int, default=100, required=True)
     parser.add_argument('--lr_rate', type=float, default=0.001, required=True, help="learning rate")
     parser.add_argument('--hidden_dim', type=int, default=512, required=True)
-    parser.add_argument('--embedding_dim', type=int, default=256, required=True)
+    parser.add_argument('--embed_dim', type=int, default=256, required=True)
     parser.add_argument('--krank', type=int, default=6, required=True)
     parser.add_argument('--truncate_num', type=int, default=4, required=True)
     # parser.add_argument('--truncate_length', type=int, default=100, help='the length of truncated sequence')
     parser.add_argument('--seed', type=int, default=2025, required=True)
     parser.add_argument('--gpu_type', type=str, default='cuda', help='gpu type') 
-    parser.add_argument('--max_length', type=int, default=400, help='max text length')
+    parser.add_argument('--max_length', type=int, default=None, help='max text length')
     parser.add_argument('--patience', type=int, default=10, help='early stopping patience')
     parser.add_argument('--checkpoints', type=str, default='./checkpoints/', help='location of model checkpoints')
     parser.add_argument('--need_vali', action="store_true", help='whether to use validation set')
@@ -43,6 +43,14 @@ if __name__ == '__main__':
     parser.add_argument("--use_multi_gpu", action="store_true", help="whether to use multiple GPUs")
     parser.add_argument("--num_worker", type=int, default=4, help="number of workers for data loading")
     parser.add_argument("--slide_window_nums", type=int, default=4, help="number of sliding windows for SPTT")
+    parser.add_argument("--min_freq", type=int, default=1, help="minimum frequency for vocabulary")
+    parser.add_argument("--fixed_length", type=int, default=None, help="fixed length for text")
+    parser.add_argument("--length_mode", type=str, default="pad", help="mode for handling text length, including pad and repeat")
+    parser.add_argument("--input_type", type=str, default="feature", help="input type, including text or feature")
+    parser.add_argument("--vocab_size", type=int, default=None, help="vocabulary size")
+    parser.add_argument("--pad_idx", type=int, default=0, help="padding index for text")
+    parser.add_argument("--exp_type", type=str, default="text", help="experiment type, including text, image and audio", required=True)
+    
     args = parser.parse_args()
 
     global_vars.krank = args.krank
@@ -50,15 +58,29 @@ if __name__ == '__main__':
     torch.set_num_threads(args.threads)
     set_seed(args.seed)
     
+    if args.exp_type == "text":
+        args.input_type = "text"
+        print(f"Input type: {args.input_type}")
+    elif args.exp_type in {"image", "audio"}:
+        args.input_type = "feature"
+        print(f"Input type: {args.input_type}")
+    else:
+        raise ValueError(f"Unsupported experiment type: {args.exp_type}")
+    
+    
     if args.use_gpu and torch.cuda.is_available():
         args.device = torch.device("cuda:{}".format(args.gpu_id))
         print('Using GPU')
+    
+    if args.truncate_num > 1:
+        if args.slide_window_nums > 1:
+            raise ValueError("Slide window need to set to 1 when truncation is enabled")
     
     if args.data_name in {'sequential_mnist', 'cifar10'}:
         exp = Exp_image_classification(args, args.device)
     elif args.data_name in {'google_speech'}:
         exp = Exp_audio_classification(args, args.device)
-    elif args.data_name in {'imdb'}:
+    elif args.data_name in {'imdb', 'ag_news'}:
         exp = Exp_text_classification(args, args.device)
     else:
         raise ValueError(f"Unsupported Experiment: {args.data_name}")

@@ -29,23 +29,39 @@ class Exp_image_classification(Exp_basic):
         
         data_loader = Data_Factory(path=Path(path), num_worker=self.args.num_worker)
         if data_name == "sequential_mnist":
-            train_loader, vali_loader = data_loader.get_data_loader(
-                data_name=self.args.data_name,
+            train_loader = data_loader.get_data_loader(
+                data_name=data_name,
                 mode="train", 
                 batch_size=self.args.batch_size,
                 need_vali=self.args.need_vali, 
                 vali_ratio=self.args.vali_ratio,
                 split_seed=self.args.seed,
-                seq_mode=self.args.seq_mode, 
+                seq_mode=self.args.seq_mode,
+                download=True, 
                 permute=self.args.permute, 
                 permutation=self.permutation if self.args.permute else None
             )
             
+            vali_loader = data_loader.get_data_loader(
+                data_name=data_name,
+                mode="vali",
+                batch_size=self.args.batch_size,
+                need_vali=self.args.need_vali, 
+                vali_ratio=self.args.vali_ratio,
+                split_seed=self.args.seed,
+                seq_mode=self.args.seq_mode, 
+                download=True,
+                permute=self.args.permute, 
+                permutation=self.permutation if self.args.permute else None
+            )
+
             test_loader = data_loader.get_data_loader(
-                data_name=self.args.data_name,
+                data_name=data_name,
                 mode="test",
+                batch_size=self.args.batch_size,
                 need_vali=False,
                 seq_mode=self.args.seq_mode,
+                download=True,
                 permute=self.args.permute,
                 permutation=self.permutation if self.args.permute else None
             )
@@ -57,7 +73,7 @@ class Exp_image_classification(Exp_basic):
     
     def _build_export_path(self) -> Path:
         timestamp = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime()) 
-        loss_path = (Path("loss_data") / self.args.model / self.args.data_name 
+        loss_path = (Path("loss_data") / self.args.exp_type / self.args.model / self.args.data_name 
                      / f"seed_{self.args.seed}" / f"krank_{self.args.krank}_Trun_{self.args.truncate_num}_Slide_{self.args.slide_window_nums}" / f"Epoch-{self.args.epochs}_Patience-{self.args.patience}")
 
         train_loss_path = loss_path /  f"train_loss=Epoch-{self.args.epochs}_Patience-{self.args.patience}_krank-{self.args.krank}_truncate-{self.args.truncate_num}_slide_{self.args.slide_window_nums}_{timestamp}.csv"
@@ -72,13 +88,32 @@ class Exp_image_classification(Exp_basic):
         visual_train_loss.parent.mkdir(parents=True, exist_ok=True)
         visual_vali_loss.parent.mkdir(parents=True, exist_ok=True)
         
-        checkpoint_path = (Path("checkpoints") / self.args.model / self.args.data_name 
+        checkpoint_path = (Path("checkpoints") / self.args.exp_type / self.args.model / self.args.data_name 
                            / f"seed_{self.args.seed}" / f"krank_{self.args.krank}_Trun_{self.args.truncate_num}_Slide_{self.args.slide_window_nums}" / f"Epoch-{self.args.epochs}_Patience-{self.args.patience}"
                            / f"checkpoint_{timestamp}.pt")
         checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         
         return train_loss_path, vali_loss_path, visual_train_loss, visual_vali_loss, checkpoint_path
     
+    def _split_time_steps(self, batch_x):
+        """
+        batch_x:
+            - feature mode: [B, T, F]
+            - text mode:    [B, T]
+        return:
+            inputs: list over time
+            
+        """
+        if batch_x.dim() == 3:
+            # feature mode
+            inputs = [batch_x[:, t, :] for t in range(batch_x.size(1))]
+        elif batch_x.dim() == 2:
+            # text mode
+            inputs = [batch_x[:, t] for t in range(batch_x.size(1))]
+        else:
+            raise ValueError(f"Unsupported batch_x shape: {batch_x.shape}")
+        
+        return inputs
         
     def train(self):
         self.file_logger, self.console_logger = _setup_logger(self.args.save, self.args, use_rich=self.args.use_rich)
@@ -96,6 +131,10 @@ class Exp_image_classification(Exp_basic):
             self.permutation = None
             
         train_loader, vali_loader, test_loader = self._get_loader(self.args.data_name)
+        self.model = self._build_model().to(self.device)
+        
+        ic(f"Input type: {self.args.input_type}")
+        
         (train_loss_path, vali_loss_path, 
          visual_train_loss, visual_vali_loss, 
          checkpoint_path) = self._build_export_path()
@@ -186,7 +225,8 @@ class Exp_image_classification(Exp_basic):
                         chunk_T = chunk_x.size(1)
                         
                         # # list of [batch_size, feature_dim], the length of inputs is chunk_T (time steps num)
-                        inputs = [chunk_x[:, t, :] for t in range(chunk_T)] 
+                        # inputs = [chunk_x[:, t, :] for t in range(chunk_T)] 
+                        inputs = self._split_time_steps(chunk_x)
                         
                         # Remaining length (relative to the starting point of the current chunk)
                         remaining_length = (actual_length - start).clamp(min=0)
@@ -326,7 +366,8 @@ class Exp_image_classification(Exp_basic):
                 self.model.reset_logits()
                 self.model.model.reset_state(batch_size)
                 
-                inputs= [batch_x[:, t, :] for t in range(sequence_length)]
+                # inputs= [batch_x[:, t, :] for t in range(sequence_length)]
+                inputs = self._split_time_steps(batch_x)
                 
                 output = self.model(
                     inputs=inputs,
@@ -382,7 +423,9 @@ class Exp_image_classification(Exp_basic):
                     device=self.device,
                 )
                 
-                inputs= [batch_x[:, t, :] for t in range(sequence_length)]
+                # inputs= [batch_x[:, t, :] for t in range(sequence_length)]
+                inputs = self._split_time_steps(batch_x)
+                
                 output = self.model(
                     inputs=inputs,
                     actual_length=actual_length,

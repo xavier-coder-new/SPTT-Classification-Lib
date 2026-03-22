@@ -56,7 +56,26 @@ class Model(nn.Module):
         self.args = args
         self.hidden_dim = args.hidden_dim
         self.output_dim = args.output_dim
-        self.model = CustomLSTM(args)
+        
+        # judge the type of input data.
+        self.input_type = getattr(args, "input_type", "feature")
+        if self.input_type == "text":
+            self.vocab_size = args.vocab_size
+            self.embed_dim = args.embed_dim
+            self.pad_idx = getattr(args, "pad_idx", None)
+
+            self.embedding = nn.Embedding(
+                num_embeddings=self.vocab_size,
+                embedding_dim=self.embed_dim,
+                padding_idx=self.pad_idx,
+            )
+
+            rnn_input_dim = self.embed_dim
+        else:
+            self.embedding = None
+            rnn_input_dim = args.feature_dim
+        
+        self.model = CustomLSTM(args, input_dim=rnn_input_dim)
         self.fc = nn.Linear(self.hidden_dim, self.output_dim)
         # The final logits for caching "completed samples" during stream/block training
         self.final_logits = None
@@ -65,6 +84,31 @@ class Model(nn.Module):
     def reset_logits(self):
         self.final_logits = None
         self.finished_mask = None
+        
+    def _prepare_inputs(self, inputs):
+        """
+        inputs:
+            - feature mode: list of [B, F]
+            - text mode:    list of [B]
+        returns:
+            processed_inputs: list of [B, F]
+            
+        """
+        if self.input_type == "text":
+            processed_inputs = []
+            for x_t in inputs:
+                # x_t: [B]
+                if x_t.dim() != 1:
+                    raise ValueError(f"Expected [B], got {x_t.shape}")
+                emb_t = self.embedding(x_t.long())  # [B, E]
+                processed_inputs.append(emb_t)
+            return processed_inputs
+        
+        else:
+            for x_t in inputs:
+                if x_t.dim() != 2:
+                    raise ValueError(f"Expected [B, F], got {x_t.shape}")
+            return inputs
         
     def reset_sptt_state(self, chunk_actual_length):
         self.model.reset_sptt_runtime(chunk_actual_length)
@@ -94,8 +138,10 @@ class Model(nn.Module):
         ensuring the freezing of the end part.
                  
         """
+        processed_inputs = self._prepare_inputs(inputs)
+        
         top_hidden, _ = self.model(
-            inputs=inputs, 
+            inputs=processed_inputs, 
             chunck_actual_length=actual_length, 
             chunk_sequence_length=sequence_length
         )
@@ -127,23 +173,23 @@ class Model(nn.Module):
 
 
 class CustomLSTM(nn.Module):
-    def __init__(self, args):
+    def __init__(self, args, input_dim):
         super().__init__()
         self.args = args
+        self.input_dim = input_dim
         self.hidden_dim = args.hidden_dim
-        self.feature_dim = args.feature_dim
         self.num_layers = args.num_layers
         self.device = args.device
         self.krank = args.krank
         self.slide_window_nums  = args.slide_window_nums
-        
+        print(f"CustomLSTM: input_dim={input_dim}, hidden_dim={args.hidden_dim}, num_layers={args.num_layers}")
         self.cells =nn.ModuleList()
         
         for layer_idx in range(self.num_layers):
-            input_dim = self.feature_dim if layer_idx == 0 else self.hidden_dim
+            cur_input_dim = self.input_dim if layer_idx == 0 else self.hidden_dim
             self.cells.append(
                 CustomLSTMCell(
-                    input_dim=input_dim,
+                    input_dim=cur_input_dim,
                     hidden_dim=self.hidden_dim,
                     krank=self.krank,
                     slide_window_nums=self.slide_window_nums,
@@ -254,8 +300,8 @@ class CustomLSTM(nn.Module):
                 # current layer output is the next layer input
                 layer_input = masked_h
             
-            top_h = self.hx_list[-1]
-            top_c = self.cx_list[-1]
+        top_h = self.hx_list[-1]
+        top_c = self.cx_list[-1]
             
         return top_h, top_c
             
@@ -496,6 +542,14 @@ class LSTMCellFunction(torch.autograd.Function):
                         dim=0,
                     )
                     Sigma_hh = i_factor * Sigma_hh + update_factor * Sigma_hh_product
+                    
+                    # XXX:
+                    Sigma_ih = torch.where(Sigma_ih == 0, torch.ones_like(Sigma_ih), Sigma_ih)
+                    Sigma_hh = torch.where(Sigma_hh == 0, torch.ones_like(Sigma_hh), Sigma_hh)
+                    
+                    # XXX：
+                    Sigma_ih = torch.nan_to_num(Sigma_ih, nan=1.0)
+                    Sigma_hh = torch.nan_to_num(Sigma_hh, nan=1.0)
 
                     Sigma_matrix_ih = torch.diag(Sigma_ih)
                     Sigma_matrix_hh = torch.diag(Sigma_hh)

@@ -3,7 +3,7 @@
 export CUDA_VISIBLE_DEVICES=0
 
 models=("SpttLSTM" "BpttLSTM" "SpttLSTM_End" "SpttGRU" "BpttGRU" "SpttGRU_End")
-data_names=("sequential_mnist")
+data_names=("google_speech")
 seeds=(2020 2021 2022 2023 2024 2025)
 epochs=300
 patience=30
@@ -28,7 +28,7 @@ args=(
 for data_name in "${data_names[@]}"; do
   for seed in "${seeds[@]}"; do
     for model in "${models[@]}"; do
-        job_name="image_classification---${model}---${data_name}---${seed}"
+        job_name="audio_classification---${model}---${data_name}---${seed}"
         echo "--------------------------------------------------------------"
         echo "Running job: ${job_name}"
         echo "Truncate Num: ${truncate_num}"
@@ -45,7 +45,7 @@ for data_name in "${data_names[@]}"; do
             "$slide_window_nums"
         )
 
-        ./scripts/image_classification/test.sh "${args[@]}"
+        ./scripts/audio_classification/test.sh "${args[@]}"
 
         echo "--------------------------------------------------------------"
         echo "Finished job: ${job_name}"

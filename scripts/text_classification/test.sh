@@ -2,22 +2,21 @@
 
 export CUDA_VISIBLE_DEVICES=0
 
-model=SpttLSTM_End
-data_name=ag_news
-seed=2025
-epochs=1
-patience=1
-truncate_num=1
-batch_size=128
-learning_rate=0.001
+model=$1
+data_name=$2
+seed=$3
+epochs=$4
+patience=$5
+truncate_num=$6
+batch_size=$7
+learning_rate=$8
 hidden_dim=512
 embed_dim=256
-num_layers=1
-krank=7
-# pixel, row
+num_layers=$9
+krank="${10}"
 vali_ratio=0.1
 exp_type=text
-slide_window_nums=1
+slide_window_nums="${11}"
 # pad, repeat
 length_mode=pad
 
