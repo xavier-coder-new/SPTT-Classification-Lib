@@ -63,6 +63,18 @@ class Exp_text_classification(Exp_basic):
             length_mode=self.args.length_mode,
         )
         
+        if data_name.lower() == "imdb":
+            self.args.input_type = "text"
+            self.args.vocab_size = len(data_loader.imdb_vocab)
+            self.args.pad_idx = data_loader.imdb_pad_idx
+        elif data_name.lower() == "ag_news":
+            self.args.input_type = "text"
+            self.args.vocab_size = len(data_loader.ag_news_vocab)
+            self.args.pad_idx = data_loader.ag_news_pad_idx
+        else:
+            self.args.input_type = "feature"
+        
+        
         return train_loader, vali_loader, test_loader
         
     def _build_model(self):
@@ -71,7 +83,7 @@ class Exp_text_classification(Exp_basic):
     
     def _build_export_path(self) -> Path:
         timestamp = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime()) 
-        loss_path = (Path("loss_data") / self.args.model / self.args.data_name 
+        loss_path = (Path("loss_data") / self.args.exp_type / self.args.model / self.args.data_name 
                      / f"seed_{self.args.seed}" / f"krank_{self.args.krank}_Trun_{self.args.truncate_num}_Slide_{self.args.slide_window_nums}" / f"Epoch-{self.args.epochs}_Patience-{self.args.patience}")
 
         train_loss_path = loss_path /  f"train_loss=Epoch-{self.args.epochs}_Patience-{self.args.patience}_krank-{self.args.krank}_truncate-{self.args.truncate_num}_slide_{self.args.slide_window_nums}_{timestamp}.csv"
@@ -86,20 +98,43 @@ class Exp_text_classification(Exp_basic):
         visual_train_loss.parent.mkdir(parents=True, exist_ok=True)
         visual_vali_loss.parent.mkdir(parents=True, exist_ok=True)
         
-        checkpoint_path = (Path("checkpoints") / self.args.model / self.args.data_name 
+        checkpoint_path = (Path("checkpoints") / self.args.exp_type / self.args.model / self.args.data_name 
                            / f"seed_{self.args.seed}" / f"krank_{self.args.krank}_Trun_{self.args.truncate_num}_Slide_{self.args.slide_window_nums}" / f"Epoch-{self.args.epochs}_Patience-{self.args.patience}"
                            / f"checkpoint_{timestamp}.pt")
         checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         
         return train_loss_path, vali_loss_path, visual_train_loss, visual_vali_loss, checkpoint_path
     
+    def _split_time_steps(self, batch_x):
+        """
+        batch_x:
+            - feature mode: [B, T, F]
+            - text mode:    [B, T]
+        return:
+            inputs: list over time
+            
+        """
+        if batch_x.dim() == 3:
+            # feature mode
+            inputs = [batch_x[:, t, :] for t in range(batch_x.size(1))]
+        elif batch_x.dim() == 2:
+            # text mode
+            inputs = [batch_x[:, t] for t in range(batch_x.size(1))]
+        else:
+            raise ValueError(f"Unsupported batch_x shape: {batch_x.shape}")
         
+        return inputs
+    
     def train(self):
         self.file_logger, self.console_logger = _setup_logger(self.args.save, self.args, use_rich=self.args.use_rich)
         self.file_logger.info(f"Starting training with args: {self.args}")
             
         train_loader, vali_loader, test_loader = self._get_loader(self.args.data_name)
         self.model = self._build_model().to(self.device)
+        
+        ic(f"Input type: {self.args.input_type}, Vocab size: {self.args.vocab_size}, Pad idx: {self.args.pad_idx}")
+        if self.args.vocab_size is None:
+            raise ValueError("Vocabulary size is not set. Please set vocab_size in args.")
         
         (train_loss_path, vali_loss_path, 
          visual_train_loss, visual_vali_loss, 
@@ -145,10 +180,9 @@ class Exp_text_classification(Exp_basic):
                 task_id = progress.add_task(f"Epoch {epoch}", total=len(train_loader))
                 
                 for i, batch in enumerate(train_loader):
-                    # batch_x: [batch_size, seq_len, feature_dim]
-                    # batch_y: [batch_size]
-                    batch_x = batch['input_ids'].to(self.device) # [B, T_max, n_mels]
-                    sequence_length = batch_x.size(1) # T_max
+                    # batch is a dictionary containing 'input_ids', 'lengths' and 'label_id'.
+                    batch_x = batch['input_ids'].to(self.device) # [B, Seq_len]
+                    sequence_length = batch_x.size(1) # padded_sequences (can broadcast)
                     actual_length = batch['lengths'].to(self.device) # [B]
                     labels = batch['label_id'].to(self.device) # [B]
                     
@@ -186,11 +220,12 @@ class Exp_text_classification(Exp_basic):
                         #     cell0.Delta_matrix_ih[0, 0].item())
                         
                         end = min(start + chunk_len, sequence_length)
-                        chunk_x = batch_x[:, start:end, :] # [batch_size, chunk_len, feature_dim]
+                        chunk_x = batch_x[:, start:end] # [batch_size, chunk_len]
                         chunk_T = chunk_x.size(1)
                         
-                        # # list of [batch_size, feature_dim], the length of inputs is chunk_T (time steps num)
-                        inputs = [chunk_x[:, t, :] for t in range(chunk_T)] 
+                        # list of [batch_size], the length of inputs is chunk_T (time steps num)
+                        # inputs = [chunk_x[:, t] for t in range(chunk_T)] 
+                        inputs = self._split_time_steps(chunk_x)
                         
                         # Remaining length (relative to the starting point of the current chunk)
                         remaining_length = (actual_length - start).clamp(min=0)
@@ -316,8 +351,8 @@ class Exp_text_classification(Exp_basic):
         
         with torch.no_grad():
             for i, batch in enumerate(vali_loader):
-                batch_x = batch['input_ids'].to(self.device)
-                sequence_length = batch_x.size(1) # [B, T_max, n_mels]
+                batch_x = batch['input_ids'].to(self.device) # [B, L]
+                sequence_length = batch_x.size(1)
                 actual_length = batch['lengths'].to(self.device)
                 labels = batch['label_id'].to(self.device)
                 
@@ -328,7 +363,8 @@ class Exp_text_classification(Exp_basic):
                 self.model.reset_logits()
                 self.model.model.reset_state(batch_size)
                 
-                inputs= [batch_x[:, t, :] for t in range(sequence_length)]
+                # inputs= [batch_x[:, t] for t in range(sequence_length)]
+                inputs = self._split_time_steps(batch_x)
                 
                 output = self.model(
                     inputs=inputs,
@@ -370,8 +406,8 @@ class Exp_text_classification(Exp_basic):
         
         with torch.no_grad():
             for i, batch in enumerate(test_loader):
-                batch_x = batch['features'].to(self.device)
-                sequence_length = batch_x.size(1) # [B, T_max, n_mels]
+                batch_x = batch['input_ids'].to(self.device) # [B, L]
+                sequence_length = batch_x.size(1)
                 actual_length = batch['lengths'].to(self.device)
                 labels = batch['label_id'].to(self.device)
                 
@@ -381,7 +417,9 @@ class Exp_text_classification(Exp_basic):
                 self.model.reset_logits()
                 self.model.model.reset_state(batch_size)
                 
-                inputs= [batch_x[:, t, :] for t in range(sequence_length)]
+                # inputs= [batch_x[:, t] for t in range(sequence_length)]
+                inputs = self._split_time_steps(batch_x)
+                
                 output = self.model(
                     inputs=inputs,
                     actual_length=actual_length,
