@@ -232,9 +232,11 @@ class IMDBDataset(Dataset):
         self.max_length = max_length
         
         # torchtext.datasets.IMDB returns iterable samples: (label, text)
+        # label is int: 1 (neg) or 2 (pos)
         self.samples = list(IMDB(root=self.path, split=self.split))
         
-        self.label_to_index = {"neg": 0, "pos": 1}
+        # self.label_to_index = {"neg": 0, "pos": 1}
+        self.label_to_index = {1: 0, 2: 1}
         self.index_to_label = {0: "neg", 1: "pos"}
         
     def __len__(self):
@@ -249,10 +251,12 @@ class IMDBDataset(Dataset):
             
         label_id = self.label_to_index[label]
         
+        label_str = self.index_to_label[label_id]
+        
         return {
             "text": text,
             "tokens": tokens,
-            "label": label,
+            "label": label_str,
             "label_id": label_id
         }
 
