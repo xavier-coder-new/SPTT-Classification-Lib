@@ -33,7 +33,7 @@ class Model(nn.Module):
             self.embedding = None
             rnn_input_dim = args.feature_dim
         
-        self.model = CustomLSTM(args)
+        self.model = CustomLSTM(args, input_dim=rnn_input_dim)
         self.fc = nn.Linear(self.hidden_dim, self.output_dim)
         # The final logits for caching "completed samples" during stream/block training
         self.final_logits = None
@@ -42,7 +42,31 @@ class Model(nn.Module):
     def reset_logits(self):
         self.final_logits = None
         self.finished_mask = None
-
+        
+    def _prepare_inputs(self, inputs):
+        """
+        inputs:
+            - feature mode: list of [B, F]
+            - text mode:    list of [B]
+        returns:
+            processed_inputs: list of [B, F]
+            
+        """
+        if self.input_type == "text":
+            processed_inputs = []
+            for x_t in inputs:
+                # x_t: [B]
+                if x_t.dim() != 1:
+                    raise ValueError(f"Expected [B], got {x_t.shape}")
+                emb_t = self.embedding(x_t.long())  # [B, E]
+                processed_inputs.append(emb_t)
+            return processed_inputs
+        
+        else:
+            for x_t in inputs:
+                if x_t.dim() != 2:
+                    raise ValueError(f"Expected [B, F], got {x_t.shape}")
+            return inputs
     def forward(self, inputs, actual_length, sequence_length, ended_in_chunk):
         """
         inputs: list of [B, F], the length of inputs is sequence_length (time steps num)
@@ -68,9 +92,10 @@ class Model(nn.Module):
         ensuring the freezing of the end part.
                  
         """
+        processed_inputs = self._prepare_inputs(inputs)
         
         top_hidden, next_cell = self.model(
-            inputs=inputs, 
+            inputs=processed_inputs, 
             chunck_actual_length=actual_length, 
             chunk_sequence_length=sequence_length
         )
@@ -102,21 +127,21 @@ class Model(nn.Module):
 
 
 class CustomLSTM(nn.Module):
-    def __init__(self, args):
+    def __init__(self, args, input_dim):
         super().__init__()
         self.args = args
+        self.input_dim = input_dim
         self.hidden_dim = args.hidden_dim
-        self.feature_dim = args.feature_dim
         self.num_layers = args.num_layers
         self.device = args.device
-        
+        print(f"CustomLSTM: input_dim={input_dim}, hidden_dim={args.hidden_dim}, num_layers={args.num_layers}")
         self.cells =nn.ModuleList()
         
         for layer_idx in range(self.num_layers):
-            input_dim = self.feature_dim if layer_idx == 0 else self.hidden_dim
+            cur_input_dim = self.input_dim if layer_idx == 0 else self.hidden_dim
             self.cells.append(
                 CustomLSTMCell(
-                    input_dim=input_dim,
+                    input_dim=cur_input_dim,
                     hidden_dim=self.hidden_dim,
                     device=self.device
                 )
@@ -211,9 +236,9 @@ class CustomLSTM(nn.Module):
                 
                 # current layer output is the next layer input
                 layer_input = masked_h
-            
-            top_h = self.hx_list[-1]
-            top_c = self.cx_list[-1]
+        
+        top_h = self.hx_list[-1]
+        top_c = self.cx_list[-1]
             
         return top_h, top_c
             
