@@ -2,7 +2,7 @@
 
 export CUDA_VISIBLE_DEVICES=0
 
-model=SpttGRU
+model=SpttLSTM_End
 data_name=ag_news
 seed=2025
 epochs=1
