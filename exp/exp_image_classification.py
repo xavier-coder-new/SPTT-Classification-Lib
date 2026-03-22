@@ -25,7 +25,7 @@ class Exp_image_classification(Exp_basic):
     # /home/leo/breeze/NMI/code/uoro_pytorch/datasets
     def _get_loader(self, data_name, path="./datasets"):
         # if data_name == "sequential_mnist":
-        #     path = "/home/leo/breeze/NMI/code/uoro_pytorch/datasets"
+            # path = "/home/leo/breeze/NMI/code/uoro_pytorch/datasets"
         
         data_loader = Data_Factory(path=Path(path), num_worker=self.args.num_worker)
         if data_name == "sequential_mnist":
