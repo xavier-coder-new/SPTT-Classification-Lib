@@ -8,6 +8,7 @@ import torchaudio
 from torch.nn.utils.rnn import pad_sequence
 from typing import Union
 from icecream import ic
+# HACK：临时解决torchtext.vocab.build_vocab_from_iterator()报错
 from torchtext.vocab import build_vocab_from_iterator
 
 class Data_Factory:
