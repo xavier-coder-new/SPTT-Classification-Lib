@@ -2,9 +2,9 @@
 
 export CUDA_VISIBLE_DEVICES=0
 
-models=("SpttLSTM" "BpttLSTM" "SpttLSTM_End" "SpttGRU" "BpttGRU" "SpttGRU_End")
+models=("BpttLSTM" "SpttLSTM" "SpttLSTM_End" "SpttGRU" "BpttGRU" "SpttGRU_End")
 data_names=("google_speech")
-seeds=(2020 2021 2022 2023 2024 2025)
+seeds=(2023 2024 2025)
 epochs=300
 patience=30
 # 1 represents no truncation, and the model will process the whole sequence at once.
@@ -15,7 +15,7 @@ batch_size=256
 # for 0.01, the SpttLSTM encountered the error, which One of values of Sigma_ih is nan in 5090 server.
 learning_rate=0.001
 num_layers=1
-krank=1
+krank=7
 slide_window_nums=1
 
 args=(
