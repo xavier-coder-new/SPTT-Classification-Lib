@@ -2,8 +2,8 @@
 
 export CUDA_VISIBLE_DEVICES=0
 
-model=SpttLSTM_End
-data_name=ag_news
+model=SpttGRU
+data_name=imdb
 seed=2025
 epochs=1
 patience=1
