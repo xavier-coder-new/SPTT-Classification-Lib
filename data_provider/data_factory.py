@@ -53,6 +53,27 @@ class Data_Factory:
         self.ag_news_unk_idx = 1
 
     def speech_commands_collate_fn(self, batch):
+        """
+        Prepare batch for RNN/GRU/LSTM with pack_padded_sequence.
+
+        Input batch:
+            batch = [
+                {"waveform": [1, T1], "sample_rate": int, "label": str, "label_id": int, ...},
+                {"waveform": [1, T2], "sample_rate": int, "label": str, "label_id": int, ...},
+                ...
+            ]
+
+        Returns:
+            {
+                "features": [B, T_max, n_mels],   # RNN input
+                "lengths": [B],                   # valid mel time frames for each sample
+                "label_id": [B],
+                "label": list[str],
+                "sample_rate": [B],
+                "speaker_id": list[str],
+                "utterance_number": [B],
+            }
+        """
         feature_list = []
         lengths = []
         labels = []
@@ -60,12 +81,15 @@ class Data_Factory:
         label_names = []
         speaker_ids = []
         utterance_numbers = []
-
+        
         for item in batch:
             waveform = item["waveform"]  # [1, T]
-            mel = self.mel_transform(waveform)          # [1, n_mels, time_frames]
-            mel = mel.squeeze(0).transpose(0, 1)       # [time_frames, n_mels]
-
+            
+            # Apply MelSpectrogram transformation to singel waveform
+            # T: The number of sampling points of the original audio
+            # time_frames: The number of frames cut out along the time axis after being transformed into spectral features
+            mel = self.mel_transform(waveform) # [1, T] -> [1, n_mels, time_frames]
+            mel = mel.squeeze(0).transpose(0, 1) # [time_frames, n_mels]
             feature_list.append(mel)
             lengths.append(mel.size(0))
             labels.append(item["label_id"])
@@ -74,10 +98,11 @@ class Data_Factory:
             speaker_ids.append(item["speaker_id"])
             utterance_numbers.append(item["utterance_number"])
 
-        padded_features = pad_sequence(feature_list, batch_first=True)
+        # Pad the features to the same length
+        padded_features = pad_sequence(feature_list, batch_first=True)  # [B, T_max, n_mels]
 
         return {
-            "features": padded_features,
+            "features": padded_features, # [B, T_max, n_mels]
             "lengths": torch.tensor(lengths, dtype=torch.long),
             "label_id": torch.tensor(labels, dtype=torch.long),
             "label": label_names,
@@ -85,6 +110,8 @@ class Data_Factory:
             "speaker_id": speaker_ids,
             "utterance_number": torch.tensor(utterance_numbers, dtype=torch.long),
         }
+        
+
 
     def _build_vocab_from_dataset(self, dataset, min_freq=1, specials=("<pad>", "<unk>")):
         counter = Counter()
@@ -308,8 +335,10 @@ class Data_Factory:
             dataset = data_wrapper.GoogleSpeechDataset(
                 path=path,
                 subset=subset,
-                sample_rate=self.sample_rate,
-                config_name="v0.02",
+                download=download,
+                # sample_rate=self.sample_rate,
+                # config_name="v0.02",
+                url="speech_commands_v0.02",
             )
 
             loader = DataLoader(
