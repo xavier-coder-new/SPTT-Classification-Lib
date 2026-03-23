@@ -24,7 +24,9 @@ class Exp_audio_classification(Exp_basic):
     
     # /home/leo/breeze/NMI/code/uoro_pytorch/datasets
     def _get_loader(self, data_name, path="./datasets"):
-
+        # if data_name == "google_speech":
+        #     path = "/home/leo/breeze/NMI/code/uoro_pytorch/datasets"
+        
         # HACK: for server, the path is different.
         data_loader = Data_Factory(path=Path(path), num_worker=self.args.num_worker)
         train_loader = data_loader.get_data_loader(

@@ -3,7 +3,7 @@
 export CUDA_VISIBLE_DEVICES=0
 
 model=BpttGRU
-data_name=ag_news
+data_name=imdb
 seed=2025
 epochs=1
 patience=1
