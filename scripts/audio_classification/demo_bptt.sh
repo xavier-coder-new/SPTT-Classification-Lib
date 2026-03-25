@@ -9,7 +9,7 @@ epochs=4
 patience=2
 # for end mode, the truncate_num need to set to 1.
 truncate_num=1
-batch_size=128
+batch_size=256
 learning_rate=0.001
 hidden_dim=512
 embed_dim=256
