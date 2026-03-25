@@ -256,6 +256,7 @@ class Data_Factory:
         self,
         data_name: str,
         mode: str,
+        offline: bool,
         batch_size=128,
         path=None,
         need_vali=True,
@@ -378,6 +379,7 @@ class Data_Factory:
                 path=path,
                 split=split,
                 max_length=max_length,
+                offline_first=offline,
             )
 
             if self.imdb_vocab is None:
@@ -385,6 +387,7 @@ class Data_Factory:
                     path=path,
                     split="train",
                     max_length=max_length,
+                    offline_first=offline,
                 )
                 self.build_imdb_vocab(vocab_dataset, min_freq=min_freq)
 
@@ -434,6 +437,7 @@ class Data_Factory:
                 path=path,
                 split=split,
                 max_length=max_length,
+                offline_first=offline,
             )
 
             if self.ag_news_vocab is None:
@@ -441,6 +445,7 @@ class Data_Factory:
                     path=path,
                     split="train",
                     max_length=max_length,
+                    offline_first=offline,
                 )
                 self.build_ag_news_vocab(vocab_dataset, min_freq=min_freq)
 
