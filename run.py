@@ -50,6 +50,7 @@ if __name__ == '__main__':
     parser.add_argument("--vocab_size", type=int, default=None, help="vocabulary size")
     parser.add_argument("--pad_idx", type=int, default=0, help="padding index for text")
     parser.add_argument("--exp_type", type=str, default="text", help="experiment type, including text, image and audio", required=True)
+    parser.add_argument("--offline", action="store_true", help="whether to use offline data loading")
     
     args = parser.parse_args()
 
