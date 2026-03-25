@@ -5,16 +5,16 @@ export CUDA_VISIBLE_DEVICES=0
 model=BpttLSTM
 data_name=google_speech
 seed=2025
-epochs=4
-patience=2
+epochs=300
+patience=30
 # for end mode, the truncate_num need to set to 1.
 truncate_num=1
-batch_size=128
+batch_size=256
 learning_rate=0.001
 hidden_dim=512
 embed_dim=256
 num_layers=1
-krank=7
+krank=6
 # for end mode, the recommended number of sliding windows is 1
 slide_window_nums=1
 exp_type=audio

@@ -2,7 +2,7 @@
 
 export CUDA_VISIBLE_DEVICES=0
 
-models=("BpttLSTM" "SpttLSTM" "SpttLSTM_End" "SpttGRU" "BpttGRU" "SpttGRU_End")
+models=("SpttGRU" "BpttGRU" "SpttGRU_End" "SpttLSTM_End")
 data_names=("google_speech")
 seeds=(2023 2024 2025)
 epochs=300
