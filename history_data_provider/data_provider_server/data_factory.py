@@ -3,7 +3,7 @@ import os
 import sys
 from collections import Counter
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-from data_provider import data_wrapper
+from data_provider_server import data_wrapper
 from torch.utils.data import DataLoader
 import torchaudio
 from torch.nn.utils.rnn import pad_sequence
@@ -52,62 +52,7 @@ class Data_Factory:
         self.ag_news_pad_idx = 0
         self.ag_news_unk_idx = 1
 
-    # def speech_commands_collate_fn(self, batch):
-    #     feature_list = []
-    #     lengths = []
-    #     labels = []
-    #     sample_rates = []
-    #     label_names = []
-    #     speaker_ids = []
-    #     utterance_numbers = []
-
-    #     for item in batch:
-    #         waveform = item["waveform"]  # [1, T]
-    #         mel = self.mel_transform(waveform)          # [1, n_mels, time_frames]
-    #         mel = mel.squeeze(0).transpose(0, 1)       # [time_frames, n_mels]
-
-    #         feature_list.append(mel)
-    #         lengths.append(mel.size(0))
-    #         labels.append(item["label_id"])
-    #         sample_rates.append(item["sample_rate"])
-    #         label_names.append(item["label"])
-    #         speaker_ids.append(item["speaker_id"])
-    #         utterance_numbers.append(item["utterance_number"])
-
-    #     padded_features = pad_sequence(feature_list, batch_first=True)
-
-    #     return {
-    #         "features": padded_features,
-    #         "lengths": torch.tensor(lengths, dtype=torch.long),
-    #         "label_id": torch.tensor(labels, dtype=torch.long),
-    #         "label": label_names,
-    #         "sample_rate": torch.tensor(sample_rates, dtype=torch.long),
-    #         "speaker_id": speaker_ids,
-    #         "utterance_number": torch.tensor(utterance_numbers, dtype=torch.long),
-    #     }
-
     def speech_commands_collate_fn(self, batch):
-        """
-        Prepare batch for RNN/GRU/LSTM with pack_padded_sequence.
-
-        Input batch:
-            batch = [
-                {"waveform": [1, T1], "sample_rate": int, "label": str, "label_id": int, ...},
-                {"waveform": [1, T2], "sample_rate": int, "label": str, "label_id": int, ...},
-                ...
-            ]
-
-        Returns:
-            {
-                "features": [B, T_max, n_mels],   # RNN input
-                "lengths": [B],                   # valid mel time frames for each sample
-                "label_id": [B],
-                "label": list[str],
-                "sample_rate": [B],
-                "speaker_id": list[str],
-                "utterance_number": [B],
-            }
-        """
         feature_list = []
         lengths = []
         labels = []
@@ -115,15 +60,12 @@ class Data_Factory:
         label_names = []
         speaker_ids = []
         utterance_numbers = []
-        
+
         for item in batch:
             waveform = item["waveform"]  # [1, T]
-            
-            # Apply MelSpectrogram transformation to singel waveform
-            # T: The number of sampling points of the original audio
-            # time_frames: The number of frames cut out along the time axis after being transformed into spectral features
-            mel = self.mel_transform(waveform) # [1, T] -> [1, n_mels, time_frames]
-            mel = mel.squeeze(0).transpose(0, 1) # [time_frames, n_mels]
+            mel = self.mel_transform(waveform)          # [1, n_mels, time_frames]
+            mel = mel.squeeze(0).transpose(0, 1)       # [time_frames, n_mels]
+
             feature_list.append(mel)
             lengths.append(mel.size(0))
             labels.append(item["label_id"])
@@ -132,11 +74,10 @@ class Data_Factory:
             speaker_ids.append(item["speaker_id"])
             utterance_numbers.append(item["utterance_number"])
 
-        # Pad the features to the same length
-        padded_features = pad_sequence(feature_list, batch_first=True)  # [B, T_max, n_mels]
+        padded_features = pad_sequence(feature_list, batch_first=True)
 
         return {
-            "features": padded_features, # [B, T_max, n_mels]
+            "features": padded_features,
             "lengths": torch.tensor(lengths, dtype=torch.long),
             "label_id": torch.tensor(labels, dtype=torch.long),
             "label": label_names,
@@ -144,8 +85,6 @@ class Data_Factory:
             "speaker_id": speaker_ids,
             "utterance_number": torch.tensor(utterance_numbers, dtype=torch.long),
         }
-        
-
 
     def _build_vocab_from_dataset(self, dataset, min_freq=1, specials=("<pad>", "<unk>")):
         counter = Counter()
@@ -290,7 +229,6 @@ class Data_Factory:
         self,
         data_name: str,
         mode: str,
-        offline: bool,
         batch_size=128,
         path=None,
         need_vali=True,
@@ -370,10 +308,8 @@ class Data_Factory:
             dataset = data_wrapper.GoogleSpeechDataset(
                 path=path,
                 subset=subset,
-                download=download,
-                # sample_rate=self.sample_rate,
-                # config_name="v0.02",
-                url="speech_commands_v0.02",
+                sample_rate=self.sample_rate,
+                config_name="v0.02",
             )
 
             loader = DataLoader(
@@ -413,7 +349,6 @@ class Data_Factory:
                 path=path,
                 split=split,
                 max_length=max_length,
-                offline_first=offline,
             )
 
             if self.imdb_vocab is None:
@@ -421,7 +356,6 @@ class Data_Factory:
                     path=path,
                     split="train",
                     max_length=max_length,
-                    offline_first=offline,
                 )
                 self.build_imdb_vocab(vocab_dataset, min_freq=min_freq)
 
@@ -471,7 +405,6 @@ class Data_Factory:
                 path=path,
                 split=split,
                 max_length=max_length,
-                offline_first=offline,
             )
 
             if self.ag_news_vocab is None:
@@ -479,7 +412,6 @@ class Data_Factory:
                     path=path,
                     split="train",
                     max_length=max_length,
-                    offline_first=offline,
                 )
                 self.build_ag_news_vocab(vocab_dataset, min_freq=min_freq)
 

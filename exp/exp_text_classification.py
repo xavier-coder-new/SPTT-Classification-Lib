@@ -28,7 +28,9 @@ class Exp_text_classification(Exp_basic):
         train_loader = data_loader.get_data_loader(
             data_name=data_name,
             mode="train", 
+            offline=self.args.offline,
             batch_size=self.args.batch_size,
+            path=Path("/home/leo/breeze/NMI/code/sptt_cla/datasets"),
             need_vali=self.args.need_vali,
             vali_ratio=self.args.vali_ratio,
             split_seed=self.args.seed,
@@ -41,7 +43,9 @@ class Exp_text_classification(Exp_basic):
         vali_loader = data_loader.get_data_loader(
             data_name=data_name,
             mode="vali",
+            offline=self.args.offline,
             batch_size=self.args.batch_size,
+            path=Path("/home/leo/breeze/NMI/code/sptt_cla/datasets"),
             need_vali=self.args.need_vali,
             vali_ratio=self.args.vali_ratio,
             split_seed=self.args.seed,
@@ -54,7 +58,9 @@ class Exp_text_classification(Exp_basic):
         test_loader = data_loader.get_data_loader(
             data_name=data_name,
             mode="test",
+            offline=self.args.offline,
             batch_size=self.args.batch_size,
+            path=Path("/home/leo/breeze/NMI/code/sptt_cla/datasets"),
             need_vali=False,
             download=True,
             max_length=self.args.max_length,

@@ -3,8 +3,10 @@ import torch
 from torchvision import datasets, transforms
 from typing import Literal, Union
 from torch.utils.data import Dataset
-from datasets import load_dataset, Audio, Dataset as HFDataset
+from datasets import load_dataset, load_from_disk, Audio, Dataset as HFDataset
 import torchaudio
+import os
+import pandas as pd
 
 def basic_english_tokenizer(text: str):
     """
@@ -175,6 +177,125 @@ class GoogleSpeechDataset(Dataset):
         }
 
 
+class ESC50Dataset(Dataset):
+    def __init__(
+        self,
+        path,
+        mode="train",
+        sample_rate=16000,
+        fold=None,
+    ):
+        """
+        ESC-50 local dataset loader.
+
+        Expected directory structure:
+            path/
+                audio/
+                meta/
+                    esc50.csv
+
+        mode:
+            - "train" / "training"
+            - "val" / "vali" / "validation"
+            - "test" / "testing"
+
+        fold:
+            ESC-50 uses 5 folds. We use:
+                test fold = fold
+                val fold  = ((fold % 5) + 1)
+                train     = remaining 3 folds
+            Default fold = 1
+        """
+        self.path = path
+        self.sample_rate = sample_rate
+        self.fold = 1 if fold is None else int(fold)
+
+        if self.fold not in {1, 2, 3, 4, 5}:
+            raise ValueError("fold must be one of {1,2,3,4,5}")
+
+        mode = mode.lower()
+        if mode in {"train", "training"}:
+            self.mode = "train"
+        elif mode in {"val", "vali", "validation"}:
+            self.mode = "validation"
+        elif mode in {"test", "testing"}:
+            self.mode = "test"
+        else:
+            raise ValueError(f"Invalid mode: {mode}")
+
+        self.audio_dir = os.path.join(path, "audio")
+        self.meta_path = os.path.join(path, "meta", "esc50.csv")
+
+        if not os.path.isdir(self.audio_dir):
+            raise FileNotFoundError(f"ESC-50 audio directory not found: {self.audio_dir}")
+        if not os.path.isfile(self.meta_path):
+            raise FileNotFoundError(f"ESC-50 metadata file not found: {self.meta_path}")
+
+        meta_df = pd.read_csv(self.meta_path)
+
+        required_cols = {"filename", "fold", "target", "category"}
+        missing_cols = required_cols - set(meta_df.columns)
+        if missing_cols:
+            raise ValueError(f"Missing required columns in esc50.csv: {missing_cols}")
+
+        test_fold = self.fold
+        val_fold = (self.fold % 5) + 1
+
+        if self.mode == "test":
+            meta_df = meta_df[meta_df["fold"] == test_fold].reset_index(drop=True)
+        elif self.mode == "validation":
+            meta_df = meta_df[meta_df["fold"] == val_fold].reset_index(drop=True)
+        else:
+            meta_df = meta_df[(meta_df["fold"] != test_fold) & (meta_df["fold"] != val_fold)].reset_index(drop=True)
+
+        self.meta_df = meta_df
+
+        label_names = sorted(meta_df["category"].unique().tolist())
+        self.label_to_index = {name: i for i, name in enumerate(label_names)}
+        self.index_to_label = {i: name for i, name in enumerate(label_names)}
+
+        # ESC-50 官方 target 是 0..49；这里保留原始 target 作为 label_id 更方便
+        # 同时 category 也保留
+        self.resampler_cache = {}
+
+    def __len__(self):
+        return len(self.meta_df)
+
+    def __getitem__(self, index):
+        row = self.meta_df.iloc[index]
+
+        filename = row["filename"]
+        audio_path = os.path.join(self.audio_dir, filename)
+
+        if not os.path.isfile(audio_path):
+            raise FileNotFoundError(f"Audio file not found: {audio_path}")
+
+        waveform, sr = torchaudio.load(audio_path)  # [C, T]
+
+        if sr != self.sample_rate:
+            key = (sr, self.sample_rate)
+            if key not in self.resampler_cache:
+                self.resampler_cache[key] = torchaudio.transforms.Resample(orig_freq=sr, new_freq=self.sample_rate)
+            waveform = self.resampler_cache[key](waveform)
+            sr = self.sample_rate
+
+        # 转单通道
+        if waveform.size(0) > 1:
+            waveform = waveform.mean(dim=0, keepdim=True)
+
+        label_name = str(row["category"])
+        label_id = int(row["target"])
+
+        return {
+            "waveform": waveform,                 # [1, T]
+            "sample_rate": sr,
+            "label": label_name,
+            "label_id": label_id,
+            "filename": filename,
+            "fold": int(row["fold"]),
+        }
+
+
 # class GoogleSpeechDataset(Dataset):
 #     def __init__(
 #         self,
@@ -278,23 +399,59 @@ class GoogleSpeechDataset(Dataset):
 
 
 class IMDBDataset(Dataset):
-    def __init__(self, path, split="train", max_length=None):
+    def __init__(
+        self,
+        path,
+        split="train",
+        max_length=None,
+        offline_first=True,
+    ):
         """
-        Hugging Face datasets version of IMDB.
-        label: 0=neg, 1=pos
+        IMDB dataset loader.
+
+        Args:
+            path: HF cache root directory, e.g. "./datasets"
+            split: "train" / "test" / "unsupervised"
+            max_length: truncate token list length
+            offline_first:
+                - True: first try to load from existing HF cache
+                - False: directly allow normal online/cached loading
         """
         self.path = path
         self.split = split
         self.max_length = max_length
-
-        self.dataset = load_dataset(
-            "imdb",
-            split=split,
-            cache_dir=str(path),
-        )
+        self.offline_first = offline_first
 
         self.label_to_index = {0: 0, 1: 1}
         self.index_to_label = {0: "neg", 1: "pos"}
+
+        self.dataset = self._load_imdb_dataset()
+
+    def _load_imdb_dataset(self):
+        # Option 1: Prioritize strict offline reading of HF cache
+        if self.offline_first:
+            try:
+                print(f"[IMDB] Trying offline HF cache from: {self.path}")
+                dataset = load_dataset(
+                    "imdb",
+                    split=self.split,
+                    cache_dir=str(self.path),
+                    download_mode="reuse_dataset_if_exists",
+                )
+                print("[IMDB] Loaded from existing HF cache or local processed cache.")
+                return dataset
+            except Exception as e:
+                print(f"[IMDB] Offline-first cache load failed: {e}")
+                print("[IMDB] Falling back to normal load_dataset(...).")
+
+        # Option 2: Normal loading (Reuse if there is cache, download if not)
+        dataset = load_dataset(
+            "imdb",
+            split=self.split,
+            cache_dir=str(self.path),
+        )
+        print("[IMDB] Loaded with normal load_dataset().")
+        return dataset
 
     def __len__(self):
         return len(self.dataset)
@@ -317,20 +474,28 @@ class IMDBDataset(Dataset):
 
 
 class AGNewsDataset(Dataset):
-    def __init__(self, path, split="train", max_length=None):
+    def __init__(
+        self,
+        path,
+        split="train",
+        max_length=None,
+        offline_first=True,
+    ):
         """
-        Hugging Face datasets version of AG_NEWS.
-        HF label is usually 0..3 already.
+        AG_NEWS dataset loader.
+
+        Args:
+            path: HF cache root directory, e.g. "./datasets"
+            split: "train" / "test"
+            max_length: truncate token list length
+            offline_first:
+                - True: first try to load from existing HF cache
+                - False: directly allow normal online/cached loading
         """
         self.path = path
         self.split = split
         self.max_length = max_length
-
-        self.dataset = load_dataset(
-            "ag_news",
-            split=split,
-            cache_dir=str(path),
-        )
+        self.offline_first = offline_first
 
         self.index_to_label = {
             0: "World",
@@ -338,6 +503,34 @@ class AGNewsDataset(Dataset):
             2: "Business",
             3: "Sci/Tech",
         }
+
+        self.dataset = self._load_ag_news_dataset()
+
+    def _load_ag_news_dataset(self):
+        # Option 1: Prioritize strict offline reading of HF cache
+        if self.offline_first:
+            try:
+                print(f"[AG_NEWS] Trying offline HF cache from: {self.path}")
+                dataset = load_dataset(
+                    "ag_news",
+                    split=self.split,
+                    cache_dir=str(self.path),
+                    download_mode="reuse_dataset_if_exists",
+                )
+                print("[AG_NEWS] Loaded from existing HF cache or local processed cache.")
+                return dataset
+            except Exception as e:
+                print(f"[AG_NEWS] Offline-first cache load failed: {e}")
+                print("[AG_NEWS] Falling back to normal load_dataset(...).")
+
+        # Option 2: Normal loading (Reuse if there is cache, download if not)
+        dataset = load_dataset(
+            "ag_news",
+            split=self.split,
+            cache_dir=str(self.path),
+        )
+        print("[AG_NEWS] Loaded with normal load_dataset().")
+        return dataset
 
     def __len__(self):
         return len(self.dataset)
