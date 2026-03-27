@@ -2,11 +2,11 @@
 
 export CUDA_VISIBLE_DEVICES=0
 
-models=("SpttLSTM" "BpttLSTM" "SpttLSTM_End" "SpttGRU" "BpttGRU" "SpttGRU_End")
+models=("BpttLSTM" "SpttLSTM" "SpttLSTM_End" "SpttGRU" "BpttGRU" "SpttGRU_End")
 data_names=("imdb" "ag_news")
-seeds=(2020 2021 2022 2023 2024 2025)
-epochs=300
-patience=30
+seeds=(2025 2024 2023)
+epochs=100
+patience=10
 # 1 represents no truncation, and the model will process the whole sequence at once.
 truncate_num=1
 # batch_size=128

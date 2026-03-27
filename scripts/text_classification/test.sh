@@ -56,7 +56,8 @@ if [ "$need_vali" = "True" ]; then
         --slide_window_nums $slide_window_nums \
         --exp_type $exp_type \
         --length_mode $length_mode \
-        --need_vali 
+        --need_vali \
+        --offline
 else
     python -m run \
         --model $model \
@@ -76,8 +77,9 @@ else
         --output_dim $output_dim \
         --num_layers $num_layers \
         --use_rich \
+        --permute \
         --slide_window_nums $slide_window_nums \
         --exp_type $exp_type \
         --length_mode $length_mode \
-        --permute 
+        --offline
 fi
