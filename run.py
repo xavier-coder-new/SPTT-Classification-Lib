@@ -51,7 +51,12 @@ if __name__ == '__main__':
     parser.add_argument("--pad_idx", type=int, default=0, help="padding index for text")
     parser.add_argument("--exp_type", type=str, default="text", help="experiment type, including text, image and audio", required=True)
     parser.add_argument("--offline", action="store_true", help="whether to use offline data loading")
-    
+    parser.add_argument("--n_mels", type=int, default=64, help="number of mel filters")
+    parser.add_argument("--sample_rate", type=int, default=16000, help="audio sample rate")
+    parser.add_argument("--esc50_fold", type=int, default=1, help="ESC50 fold number for testing, default is 1")
+    parser.add_argument("--n_fft", type=int, default=2048, help="feedforward network dimension for transformer model")
+    parser.add_argument("--hop_length", type=int, default=512, help="hop length for STFT")
+
     args = parser.parse_args()
 
     global_vars.krank = args.krank
@@ -79,9 +84,9 @@ if __name__ == '__main__':
     
     if args.data_name in {'sequential_mnist', 'cifar10'}:
         exp = Exp_image_classification(args, args.device)
-    elif args.data_name in {'google_speech'}:
+    elif args.data_name in {'google_speech', 'esc50'}:
         exp = Exp_audio_classification(args, args.device)
-    elif args.data_name in {'imdb', 'ag_news'}:
+    elif args.data_name in {'imdb', 'ag_news', 'byte_imdb'}:
         exp = Exp_text_classification(args, args.device)
     else:
         raise ValueError(f"Unsupported Experiment: {args.data_name}")
