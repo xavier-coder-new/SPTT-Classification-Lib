@@ -3,12 +3,12 @@
 export CUDA_VISIBLE_DEVICES=0
 
 model=SpttGRU
-data_name=imdb
+data_name=byte_imdb
 seed=2025
-epochs=1
+epochs=2
 patience=1
 truncate_num=1
-batch_size=128
+batch_size=256
 learning_rate=0.001
 hidden_dim=512
 embed_dim=256
@@ -21,8 +21,8 @@ slide_window_nums=1
 # pad, repeat
 length_mode=pad
 
-if [[ "$data_name" = "imdb" ]]; then
-    batch_size=128
+if [[ "$data_name" = "imdb" || "$data_name" = "byte_imdb" ]]; then
+    batch_size=256
     feature_dim=$embed_dim
     output_dim=2
     need_vali=True
