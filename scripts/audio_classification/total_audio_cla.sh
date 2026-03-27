@@ -2,9 +2,9 @@
 
 export CUDA_VISIBLE_DEVICES=0
 
-models=("SpttGRU" "BpttGRU" "SpttGRU_End" "SpttLSTM_End")
-data_names=("google_speech")
-seeds=(2023 2024 2025)
+models=("SpttLSTM" "BpttLSTM" "SpttLSTM_End" "SpttGRU" "BpttGRU" "SpttGRU_End")
+data_names=("google_speech" "esc50")
+seeds=(2020 2021 2022 2023 2024 2025)
 epochs=300
 patience=30
 # 1 represents no truncation, and the model will process the whole sequence at once.

@@ -28,24 +28,33 @@ class Exp_audio_classification(Exp_basic):
             path = "/home/leo/breeze/NMI/code/uoro_pytorch/datasets"
         
         # HACK: for server, the path is different.
-        data_loader = Data_Factory(path=Path(path), num_worker=self.args.num_worker)
+        data_loader = Data_Factory(path=Path(path), 
+                                   num_worker=self.args.num_worker, 
+                                   sample_rate=self.args.sample_rate, 
+                                   n_mels=self.args.n_mels,
+                                   n_fft=self.args.n_fft,
+                                   hop_length=self.args.hop_length
+                                )
         train_loader = data_loader.get_data_loader(
             data_name=data_name,
             mode="train", 
             batch_size=self.args.batch_size,
             download=True,
+            esc50_fold=self.args.esc50_fold,
         )
         vali_loader = data_loader.get_data_loader(
             data_name=data_name,
             mode="vali",
             batch_size=self.args.batch_size,
             download=True,
+            esc50_fold=self.args.esc50_fold,
         )
         test_loader = data_loader.get_data_loader(
             data_name=data_name,
             mode="test",
             batch_size=self.args.batch_size,
             download=True,
+            esc50_fold=self.args.esc50_fold,
         )
         
         return train_loader, vali_loader, test_loader

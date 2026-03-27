@@ -20,8 +20,8 @@ slide_window_nums="${11}"
 # pad, repeat
 length_mode=pad
 
-if [[ "$data_name" = "imdb" ]]; then
-    batch_size=128
+if [[ "$data_name" = "imdb" || "$data_name" = "byte_imdb" ]]; then
+    batch_size=256
     feature_dim=$embed_dim
     output_dim=2
     need_vali=True

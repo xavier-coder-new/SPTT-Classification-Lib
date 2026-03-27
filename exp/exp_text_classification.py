@@ -77,6 +77,10 @@ class Exp_text_classification(Exp_basic):
             self.args.input_type = "text"
             self.args.vocab_size = len(data_loader.ag_news_vocab)
             self.args.pad_idx = data_loader.ag_news_pad_idx
+        elif data_name.lower() == "byte_imdb":
+            self.args.input_type = "text"
+            self.args.vocab_size = data_loader.byte_imdb_vocab_size
+            self.args.pad_idx = data_loader.byte_imdb_pad_idx
         else:
             self.args.input_type = "feature"
         

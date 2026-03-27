@@ -184,31 +184,33 @@ class ESC50Dataset(Dataset):
         mode="train",
         sample_rate=16000,
         fold=None,
+        offline_first=True,
     ):
         """
-        ESC-50 local dataset loader.
+        Hugging Face version of ESC-50 using: ashraq/esc50
 
-        Expected directory structure:
-            path/
-                audio/
-                meta/
-                    esc50.csv
-
-        mode:
-            - "train" / "training"
-            - "val" / "vali" / "validation"
-            - "test" / "testing"
-
-        fold:
-            ESC-50 uses 5 folds. We use:
-                test fold = fold
-                val fold  = ((fold % 5) + 1)
-                train     = remaining 3 folds
-            Default fold = 1
+        Args:
+            path:
+                HF cache root directory, e.g. "./datasets"
+            mode:
+                - "train" / "training"
+                - "val" / "vali" / "validation"
+                - "test" / "testing"
+            sample_rate:
+                target sampling rate
+            fold:
+                ESC-50 uses 5 folds. We use:
+                    test fold = fold
+                    val fold  = ((fold % 5) + 1)
+                    train     = remaining 3 folds
+                Default fold = 1
+            offline_first:
+                first try reusing local HF cache
         """
         self.path = path
         self.sample_rate = sample_rate
         self.fold = 1 if fold is None else int(fold)
+        self.offline_first = offline_first
 
         if self.fold not in {1, 2, 3, 4, 5}:
             raise ValueError("fold must be one of {1,2,3,4,5}")
@@ -223,179 +225,87 @@ class ESC50Dataset(Dataset):
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-        self.audio_dir = os.path.join(path, "audio")
-        self.meta_path = os.path.join(path, "meta", "esc50.csv")
+        self.dataset = self._load_esc50_dataset()
 
-        if not os.path.isdir(self.audio_dir):
-            raise FileNotFoundError(f"ESC-50 audio directory not found: {self.audio_dir}")
-        if not os.path.isfile(self.meta_path):
-            raise FileNotFoundError(f"ESC-50 metadata file not found: {self.meta_path}")
-
-        meta_df = pd.read_csv(self.meta_path)
-
-        required_cols = {"filename", "fold", "target", "category"}
-        missing_cols = required_cols - set(meta_df.columns)
+        required_cols = {"filename", "fold", "target", "category", "audio"}
+        missing_cols = required_cols - set(self.dataset.column_names)
         if missing_cols:
-            raise ValueError(f"Missing required columns in esc50.csv: {missing_cols}")
+            raise ValueError(f"Missing required columns in ashraq/esc50: {missing_cols}")
 
         test_fold = self.fold
         val_fold = (self.fold % 5) + 1
 
         if self.mode == "test":
-            meta_df = meta_df[meta_df["fold"] == test_fold].reset_index(drop=True)
+            self.dataset = self.dataset.filter(lambda x: x["fold"] == test_fold)
         elif self.mode == "validation":
-            meta_df = meta_df[meta_df["fold"] == val_fold].reset_index(drop=True)
+            self.dataset = self.dataset.filter(lambda x: x["fold"] == val_fold)
         else:
-            meta_df = meta_df[(meta_df["fold"] != test_fold) & (meta_df["fold"] != val_fold)].reset_index(drop=True)
+            self.dataset = self.dataset.filter(
+                lambda x: (x["fold"] != test_fold) and (x["fold"] != val_fold)
+            )
 
-        self.meta_df = meta_df
-
-        label_names = sorted(meta_df["category"].unique().tolist())
+        label_names = sorted(set(self.dataset["category"]))
         self.label_to_index = {name: i for i, name in enumerate(label_names)}
         self.index_to_label = {i: name for i, name in enumerate(label_names)}
 
-        # ESC-50 官方 target 是 0..49；这里保留原始 target 作为 label_id 更方便
-        # 同时 category 也保留
-        self.resampler_cache = {}
+        # 让 audio 列在访问时自动重采样到目标采样率
+        self.dataset = self.dataset.cast_column("audio", Audio(sampling_rate=sample_rate))
+
+    def _load_esc50_dataset(self):
+        if self.offline_first:
+            try:
+                print(f"[ESC50] Trying offline HF cache from: {self.path}")
+                dataset = load_dataset(
+                    "ashraq/esc50",
+                    split="train",
+                    cache_dir=str(self.path),
+                    download_mode="reuse_dataset_if_exists",
+                )
+                print("[ESC50] Loaded from existing HF cache or local processed cache.")
+                return dataset
+            except Exception as e:
+                print(f"[ESC50] Offline-first cache load failed: {e}")
+                print("[ESC50] Falling back to normal load_dataset(...).")
+
+        dataset = load_dataset(
+            "ashraq/esc50",
+            split="train",
+            cache_dir=str(self.path),
+        )
+        print("[ESC50] Loaded with normal load_dataset().")
+        return dataset
 
     def __len__(self):
-        return len(self.meta_df)
+        return len(self.dataset)
 
     def __getitem__(self, index):
-        row = self.meta_df.iloc[index]
+        item = self.dataset[index]
 
-        filename = row["filename"]
-        audio_path = os.path.join(self.audio_dir, filename)
+        audio_info = item["audio"]
+        waveform = torch.tensor(audio_info["array"], dtype=torch.float32)
 
-        if not os.path.isfile(audio_path):
-            raise FileNotFoundError(f"Audio file not found: {audio_path}")
+        if waveform.dim() == 1:
+            waveform = waveform.unsqueeze(0)  # [1, T]
+        elif waveform.dim() == 2:
+            pass
+        else:
+            raise ValueError(f"Unexpected waveform shape: {waveform.shape}")
 
-        waveform, sr = torchaudio.load(audio_path)  # [C, T]
-
-        if sr != self.sample_rate:
-            key = (sr, self.sample_rate)
-            if key not in self.resampler_cache:
-                self.resampler_cache[key] = torchaudio.transforms.Resample(orig_freq=sr, new_freq=self.sample_rate)
-            waveform = self.resampler_cache[key](waveform)
-            sr = self.sample_rate
-
-        # 转单通道
+        # 双保险：如果有多通道，压成单通道
         if waveform.size(0) > 1:
             waveform = waveform.mean(dim=0, keepdim=True)
 
-        label_name = str(row["category"])
-        label_id = int(row["target"])
+        label_name = str(item["category"])
+        label_id = int(item["target"])
 
         return {
-            "waveform": waveform,                 # [1, T]
-            "sample_rate": sr,
+            "waveform": waveform,                         # [1, T]
+            "sample_rate": int(audio_info["sampling_rate"]),
             "label": label_name,
-            "label_id": label_id,
-            "filename": filename,
-            "fold": int(row["fold"]),
+            "label_id": label_id,                        # 0..49
+            "filename": item["filename"],
+            "fold": int(item["fold"]),
         }
-
-
-# class GoogleSpeechDataset(Dataset):
-#     def __init__(
-#         self,
-#         path,
-#         subset="training",
-#         sample_rate=16000,
-#         config_name="v0.02",
-#     ):
-#         """
-#         Hugging Face datasets version of Speech Commands.
-
-#         subset:
-#             - "training" / "train"
-#             - "validation" / "val" / "vali"
-#             - "testing" / "test"
-#         """
-#         subset_map = {
-#             "training": "train",
-#             "train": "train",
-#             "validation": "validation",
-#             "val": "validation",
-#             "vali": "validation",
-#             "testing": "test",
-#             "test": "test",
-#         }
-#         if subset not in subset_map:
-#             raise ValueError(f"Invalid subset: {subset}")
-
-#         # 不要自己拼了，直接判断 subset 并使用你刚刚复制出来的绝对路径
-#         if subset in ["training", "train"]:
-#             # 把下面这串红色的字符串，替换成你刚刚右键复制出来的真实路径！
-#             arrow_file_path = "/mnt/hard_disk/weihao/SPTT-Classification-Lib/datasets/speech_commands/v0.02/0.2.0/ba3d9a6cf49aa1313c51abe16b59203451482ccb9fee6d23c94fecabf3e206da/speech_commands-train.arrow" 
-            
-#         elif subset in ["validation", "val", "vali"]:
-#             # 同样替换为 validation.arrow 的绝对路径
-#             arrow_file_path = "/mnt/hard_disk/weihao/SPTT-Classification-Lib/datasets/speech_commands/v0.02/0.2.0/ba3d9a6cf49aa1313c51abe16b59203451482ccb9fee6d23c94fecabf3e206da/speech_commands-validation.arrow"
-            
-#         elif subset in ["testing", "test"]:
-#             # 同样替换为 test.arrow 的绝对路径
-#             arrow_file_path = "/mnt/hard_disk/weihao/SPTT-Classification-Lib/datasets/speech_commands/v0.02/0.2.0/ba3d9a6cf49aa1313c51abe16b59203451482ccb9fee6d23c94fecabf3e206da/speech_commands-test.arrow"
-
-#         print(f"正在纯离线加载音频数据: {arrow_file_path}")
-
-#         # ds = load_dataset(
-#         #     "speech_commands",
-#         #     config_name,
-#         #     split=hf_split,
-#         #     cache_dir="/mnt/hard_disk/datasets",
-#         # )
-        
-#         ds = HFDataset.from_file(arrow_file_path)
-
-#         # decode + resample on access
-#         ds = ds.cast_column("audio", Audio(sampling_rate=sample_rate))
-
-#         self.dataset = ds
-#         self.sample_rate = sample_rate
-
-#         if "label" in ds.features and hasattr(ds.features["label"], "names"):
-#             label_names = ds.features["label"].names
-#         else:
-#             # 万一离线文件里没存标签名，我们手动备用写死 Google Speech V2 的 35 个类
-#             print("Google Speech V2 35 classes:")
-#             label_names = ["backward", "bed", "bird", "cat", "dog", 
-#                            "down", "eight", "five", "follow", "forward", 
-#                            "four", "go", "happy", "house", "learn", "left", 
-#                            "marvin", "nine", "no", "off", "on", "one", "right", 
-#                            "seven", "sheila", "six", "stop", "three", "tree", 
-#                            "two", "up", "visual", "wow", "yes", "zero"]
-#         self.label_to_index = {name: i for i, name in enumerate(label_names)}
-#         self.index_to_label = {i: name for i, name in enumerate(label_names)}
-
-#     def __len__(self):
-#         return len(self.dataset)
-
-#     def __getitem__(self, index):
-#         item = self.dataset[index]
-
-#         audio_info = item["audio"]
-#         waveform = torch.tensor(audio_info["array"], dtype=torch.float32).unsqueeze(0)  # [1, T]
-
-#         # HF label may already be int class index
-#         if isinstance(item["label"], int):
-#             label_id = item["label"]
-#             label_name = self.index_to_label[label_id]
-#         else:
-#             label_name = item["label"]
-#             label_id = self.label_to_index[label_name]
-
-#         speaker_id = item.get("speaker_id", "unknown")
-#         utterance_number = item.get("utterance_id", 0)
-
-#         return {
-#             "waveform": waveform,
-#             "sample_rate": audio_info["sampling_rate"],
-#             "label": label_name,
-#             "label_id": label_id,
-#             "speaker_id": str(speaker_id),
-#             "utterance_number": int(utterance_number) if str(utterance_number).isdigit() else 0,
-#         }
 
 
 class IMDBDataset(Dataset):
@@ -549,4 +459,110 @@ class AGNewsDataset(Dataset):
             "tokens": tokens,
             "label": self.index_to_label[label_id],
             "label_id": label_id,
+        }
+        
+class ByteIMDBDataset(Dataset):
+    def __init__(
+        self,
+        path,
+        split="train",
+        max_length=4000,
+        offline_first=True,
+        encoding="utf-8",
+        add_eos=False,
+    ):
+        """
+        LRA-style byte-level IMDB dataset.
+
+        Args:
+            path:
+                HF cache root directory, e.g. "./datasets"
+            split:
+                "train" / "test"
+            max_length:
+                target byte sequence length before collate-time padding/truncation logic
+                for LRA IMDB, common length is around 4000
+            offline_first:
+                first try reusing HF cache
+            encoding:
+                text encoding, default utf-8
+            add_eos:
+                whether to append one EOS byte token
+        """
+        self.path = path
+        self.split = split
+        self.max_length = max_length
+        self.offline_first = offline_first
+        self.encoding = encoding
+        self.add_eos = add_eos
+
+        self.label_to_index = {0: 0, 1: 1}
+        self.index_to_label = {0: "neg", 1: "pos"}
+
+        # byte vocabulary:
+        # pad_id = 0
+        # actual bytes 0..255 are shifted to 1..256
+        self.pad_idx = 0
+        self.byte_vocab_size = 257  # 0 for PAD, 1..256 for bytes
+
+        # optional EOS token
+        self.eos_idx = 257 if add_eos else None
+        if add_eos:
+            self.byte_vocab_size = 258
+
+        self.dataset = self._load_imdb_dataset()
+
+    def _load_imdb_dataset(self):
+        if self.offline_first:
+            try:
+                print(f"[BYTE_IMDB] Trying offline HF cache from: {self.path}")
+                dataset = load_dataset(
+                    "imdb",
+                    split=self.split,
+                    cache_dir=str(self.path),
+                    download_mode="reuse_dataset_if_exists",
+                )
+                print("[BYTE_IMDB] Loaded from existing HF cache or local processed cache.")
+                return dataset
+            except Exception as e:
+                print(f"[BYTE_IMDB] Offline-first cache load failed: {e}")
+                print("[BYTE_IMDB] Falling back to normal load_dataset(...).")
+
+        dataset = load_dataset(
+            "imdb",
+            split=self.split,
+            cache_dir=str(self.path),
+        )
+        print("[BYTE_IMDB] Loaded with normal load_dataset().")
+        return dataset
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def _text_to_byte_ids(self, text: str):
+        raw_bytes = text.encode(self.encoding, errors="replace")
+        # shift by +1 so that 0 can be reserved for PAD
+        byte_ids = [b + 1 for b in raw_bytes]
+
+        if self.add_eos:
+            byte_ids.append(self.eos_idx)
+
+        if self.max_length is not None:
+            byte_ids = byte_ids[:self.max_length]
+
+        return byte_ids
+
+    def __getitem__(self, index):
+        item = self.dataset[index]
+        text = item["text"]
+        label = int(item["label"])
+
+        byte_ids = self._text_to_byte_ids(text)
+
+        return {
+            "text": text,
+            "byte_ids": byte_ids,
+            "length": len(byte_ids),
+            "label": self.index_to_label[label],
+            "label_id": self.label_to_index[label],
         }
