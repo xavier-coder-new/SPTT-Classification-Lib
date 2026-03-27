@@ -19,17 +19,21 @@ exp_type=text
 slide_window_nums="${11}"
 # pad, repeat
 length_mode=pad
+max_length="${12}"
+fixed_length="${13}"
 
 if [[ "$data_name" = "imdb" || "$data_name" = "byte_imdb" ]]; then
-    batch_size=256
+    batch_size=128
     feature_dim=$embed_dim
     output_dim=2
     need_vali=True
 elif [[ "$data_name" = "ag_news" ]]; then
-    batch_size=256
+    batch_size=128
     feature_dim=$embed_dim
     output_dim=4
     need_vali=True
+    max_length=None
+    fixed_length=None
 fi
 
 # Run training with or without validation set
@@ -56,7 +60,10 @@ if [ "$need_vali" = "True" ]; then
         --slide_window_nums $slide_window_nums \
         --exp_type $exp_type \
         --length_mode $length_mode \
-        --need_vali 
+        --need_vali \
+        --offline \
+        --max_length $max_length \
+        --fixed_length $fixed_length
 else
     python -m run \
         --model $model \
@@ -76,8 +83,11 @@ else
         --output_dim $output_dim \
         --num_layers $num_layers \
         --use_rich \
+        --permute \
         --slide_window_nums $slide_window_nums \
         --exp_type $exp_type \
         --length_mode $length_mode \
-        --permute 
+        --offline \
+        --max_length $max_length \
+        --fixed_length $fixed_length
 fi

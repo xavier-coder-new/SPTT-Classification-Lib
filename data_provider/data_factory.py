@@ -62,6 +62,40 @@ class Data_Factory:
         self.byte_imdb_eos_idx = None
 
 
+    # def speech_commands_collate_fn(self, batch):
+    #     feature_list = []
+    #     lengths = []
+    #     labels = []
+    #     sample_rates = []
+    #     label_names = []
+    #     speaker_ids = []
+    #     utterance_numbers = []
+
+    #     for item in batch:
+    #         waveform = item["waveform"]  # [1, T]
+    #         mel = self.mel_transform(waveform)          # [1, n_mels, time_frames]
+    #         mel = mel.squeeze(0).transpose(0, 1)       # [time_frames, n_mels]
+
+    #         feature_list.append(mel)
+    #         lengths.append(mel.size(0))
+    #         labels.append(item["label_id"])
+    #         sample_rates.append(item["sample_rate"])
+    #         label_names.append(item["label"])
+    #         speaker_ids.append(item["speaker_id"])
+    #         utterance_numbers.append(item["utterance_number"])
+
+    #     padded_features = pad_sequence(feature_list, batch_first=True)
+
+    #     return {
+    #         "features": padded_features,
+    #         "lengths": torch.tensor(lengths, dtype=torch.long),
+    #         "label_id": torch.tensor(labels, dtype=torch.long),
+    #         "label": label_names,
+    #         "sample_rate": torch.tensor(sample_rates, dtype=torch.long),
+    #         "speaker_id": speaker_ids,
+    #         "utterance_number": torch.tensor(utterance_numbers, dtype=torch.long),
+    #     }
+
     def speech_commands_collate_fn(self, batch):
         """
         Prepare batch for RNN/GRU/LSTM with pack_padded_sequence.

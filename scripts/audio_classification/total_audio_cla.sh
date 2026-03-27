@@ -15,7 +15,7 @@ batch_size=256
 # for 0.01, the SpttLSTM encountered the error, which One of values of Sigma_ih is nan in 5090 server.
 learning_rate=0.001
 num_layers=1
-krank=1
+krank=7
 slide_window_nums=1
 
 args=(

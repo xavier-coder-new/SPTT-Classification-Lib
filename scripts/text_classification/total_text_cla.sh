@@ -2,27 +2,29 @@
 
 export CUDA_VISIBLE_DEVICES=0
 
-models=("SpttLSTM" "BpttLSTM" "SpttLSTM_End" "SpttGRU" "BpttGRU" "SpttGRU_End")
-data_names=("imdb" "ag_news" "byte_imdb")
-seeds=(2020 2021 2022 2023 2024 2025)
+models=("BpttLSTM" "SpttLSTM" "BpttGRU" "SpttGRU" "SpttLSTM_End" "SpttGRU_End")
+data_names=("byte_imdb")
+seeds=(2023 2024 2025)
 epochs=300
 patience=30
 # 1 represents no truncation, and the model will process the whole sequence at once.
 truncate_num=1
 # batch_size=128
-batch_size=256
+batch_size=128
 # learning_rate=0.005
 # for 0.01, the SpttLSTM encountered the error, which One of values of Sigma_ih is nan in 5090 server.
 learning_rate=0.001
 num_layers=1
 krank=1
 slide_window_nums=1
+max_length=4000
+fixed_length=4000
 
 args=(
     "$model" "$data_name" "$seed" "$epochs"
     "$patience" "$truncate_num" "$batch_size"
     "$learning_rate" "$num_layers" "$krank"
-    "$slide_window_nums"
+    "$slide_window_nums" "$max_length" "$fixed_length"
 )
 
 for seed in "${seeds[@]}"; do
@@ -42,7 +44,7 @@ for seed in "${seeds[@]}"; do
             "$model" "$data_name" "$seed" "$epochs"
             "$patience" "$truncate_num" "$batch_size"
             "$learning_rate" "$num_layers" "$krank"
-            "$slide_window_nums"
+            "$slide_window_nums" "$max_length" "$fixed_length"
         )
 
         ./scripts/text_classification/test.sh "${args[@]}"
