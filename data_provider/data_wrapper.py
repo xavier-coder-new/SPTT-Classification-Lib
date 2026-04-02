@@ -75,6 +75,134 @@ class SequentialMNISTDataset(Dataset):
 
         return x, y
 
+class SequentialCIFAR10Dataset(Dataset):
+    def __init__(
+        self,
+        path: str,
+        is_train: bool,
+        need_vali: bool,
+        is_download: bool,
+        seq_mode: Literal["pixel", "row"] = "pixel",
+        permute: bool = False,
+        permutation: Union[torch.Tensor, None] = None,
+        to_grayscale: bool = True,
+        normalize: bool = False,
+    ):
+        """
+        LRA-style sequential CIFAR-10 dataset.
+
+        Args:
+            path:
+                dataset root
+            is_train:
+                whether to load training split
+            need_vali:
+                whether this split may later be used with random_split
+            is_download:
+                whether to download the dataset
+            seq_mode:
+                - "pixel":
+                    grayscale: [1024, 1]
+                    rgb      : [1024, 3]
+                - "row":
+                    grayscale: [32, 32]
+                    rgb      : [32, 96]   # flatten channel dim into feature dim
+            permute:
+                whether to apply a fixed permutation on spatial positions
+            permutation:
+                permutation over 1024 spatial positions
+            to_grayscale:
+                True -> convert RGB to grayscale first (recommended for LRA-like setup)
+            normalize:
+                whether to normalize to roughly zero mean / unit variance
+        """
+        self.path = path
+        self.is_train = is_train
+        self.need_vali = need_vali
+        self.is_download = is_download
+        self.seq_mode = seq_mode
+        self.permute = permute
+        self.to_grayscale = to_grayscale
+        self.normalize = normalize
+
+        transform_list = [transforms.ToTensor()]  # [C, 32, 32], in [0,1]
+
+        if self.to_grayscale:
+            transform_list.insert(0, transforms.Grayscale(num_output_channels=1))
+
+        if self.normalize:
+            if self.to_grayscale:
+                transform_list.append(transforms.Normalize((0.5,), (0.5,)))
+            else:
+                transform_list.append(transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)))
+
+        self.cifar10 = datasets.CIFAR10(
+            root=self.path,
+            train=self.is_train,
+            download=self.is_download,
+            transform=transforms.Compose(transform_list),
+        )
+
+        seq_len = 32 * 32  # 1024 spatial positions
+
+        if self.need_vali and self.permute:
+            if permutation is None:
+                raise ValueError("Permutation must be provided when need_vali is True")
+            if permutation.numel() != seq_len:
+                raise ValueError("Permutation must have 1024 elements")
+            self.permutation = permutation
+
+        elif (not self.need_vali) and self.permute:
+            if permutation is None:
+                self.permutation = torch.randperm(seq_len)
+            else:
+                if permutation.numel() != seq_len:
+                    raise ValueError("Permutation must have 1024 elements")
+                self.permutation = permutation
+        else:
+            self.permutation = None
+
+    def __len__(self):
+        return len(self.cifar10)
+
+    def __getitem__(self, idx):
+        x, y = self.cifar10[idx]
+        # x:
+        #   grayscale -> [1, 32, 32]
+        #   rgb       -> [3, 32, 32]
+
+        if self.seq_mode == "pixel":
+            if self.to_grayscale:
+                # [1, 32, 32] -> [1024, 1]
+                x = x.view(-1)
+                if self.permutation is not None:
+                    x = x[self.permutation]
+                x = x.unsqueeze(-1)
+            else:
+                # [3, 32, 32] -> [1024, 3]
+                x = x.permute(1, 2, 0).reshape(-1, 3)
+                if self.permutation is not None:
+                    x = x[self.permutation]
+
+        elif self.seq_mode == "row":
+            if self.to_grayscale:
+                # [1, 32, 32] -> [32, 32]
+                x = x.squeeze(0)
+                if self.permutation is not None:
+                    x = x.reshape(-1)[self.permutation].reshape(32, 32)
+            else:
+                # [3, 32, 32] -> [32, 96]
+                x = x.permute(1, 2, 0).reshape(32, 32 * 3)
+                if self.permutation is not None:
+                    # permutation is defined over 1024 spatial positions,
+                    # so we first reshape to [1024, 3], permute, then reshape back
+                    x_spatial = x.reshape(32 * 32, 3)[self.permutation]
+                    x = x_spatial.reshape(32, 32 * 3)
+        else:
+            raise ValueError("seq_mode must be 'pixel' or 'row'")
+
+        return x, y
+
 
 class GoogleSpeechDataset(Dataset):
     def __init__(self, path, subset="training", download=False, url="speech_commands_v0.02"):

@@ -457,6 +457,50 @@ class Data_Factory:
                 pin_memory=torch.cuda.is_available(),
             )
             return loader
+        
+        elif data_name == "cifar10":
+            if mode in {"train", "training"}:
+                is_train = True
+                shuffle = True
+            elif mode in {"vali", "validation", "val"}:
+                is_train = True
+                shuffle = False
+            elif mode in {"test", "testing"}:
+                is_train = False
+                shuffle = False
+            else:
+                raise ValueError("Invalid mode")
+
+            dataset = data_wrapper.SequentialCIFAR10Dataset(
+                path=path,
+                is_train=is_train,
+                need_vali=need_vali,
+                is_download=download,
+                seq_mode=seq_mode,
+                permute=permute,
+                permutation=permutation,
+                to_grayscale=True,   # LRA-style default
+                normalize=False,
+            )
+
+            if mode in {"train", "training", "vali", "validation", "val"} and need_vali:
+                train_size = int((1 - vali_ratio) * len(dataset))
+                vali_size = len(dataset) - train_size
+                generator = torch.Generator().manual_seed(split_seed)
+                train_dataset, vali_dataset = torch.utils.data.random_split(
+                    dataset, [train_size, vali_size], generator=generator
+                )
+                dataset = train_dataset if mode in {"train", "training"} else vali_dataset
+
+            loader = DataLoader(
+                dataset=dataset,
+                batch_size=batch_size,
+                shuffle=shuffle,
+                drop_last=True,
+                num_workers=self.num_worker,
+                pin_memory=torch.cuda.is_available(),
+            )
+            return loader
 
         elif data_name == "google_speech":
             if mode in {"train", "training"}:
