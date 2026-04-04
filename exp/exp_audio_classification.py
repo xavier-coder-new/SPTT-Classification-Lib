@@ -41,6 +41,8 @@ class Exp_audio_classification(Exp_basic):
             batch_size=self.args.batch_size,
             download=True,
             esc50_fold=self.args.esc50_fold,
+            nsynth_label_type=self.args.nsynth_label_type,
+            nsynth_config=self.args.nsynth_config,
         )
         vali_loader = data_loader.get_data_loader(
             data_name=data_name,
@@ -48,6 +50,8 @@ class Exp_audio_classification(Exp_basic):
             batch_size=self.args.batch_size,
             download=True,
             esc50_fold=self.args.esc50_fold,
+            nsynth_label_type=self.args.nsynth_label_type,
+            nsynth_config=self.args.nsynth_config,
         )
         test_loader = data_loader.get_data_loader(
             data_name=data_name,
@@ -55,6 +59,8 @@ class Exp_audio_classification(Exp_basic):
             batch_size=self.args.batch_size,
             download=True,
             esc50_fold=self.args.esc50_fold,
+            nsynth_label_type=self.args.nsynth_label_type,
+            nsynth_config=self.args.nsynth_config,
         )
         
         return train_loader, vali_loader, test_loader
