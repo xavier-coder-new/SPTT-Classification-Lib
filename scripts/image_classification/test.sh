@@ -23,7 +23,7 @@ slide_window_nums="${11}"
 exp_type=image
 
 # Set dataset-specific parameters
-if [[ "$data_name" = "sequential_mnist" ]]; then
+if [[ "$data_name" = "sequential_mnist" ]] || [[ "$data_name" = "cifar10" ]]; then
     feature_dim=1
     output_dim=10
     need_vali=True
@@ -53,7 +53,8 @@ if [ "$need_vali" = "True" ]; then
         --permute \
         --slide_window_nums $slide_window_nums \
         --exp_type=$exp_type \
-        --need_vali 
+        --need_vali \
+        --to_grayscale
 else
     python -m run \
         --model $model \
@@ -76,5 +77,6 @@ else
         --use_rich \
         --slide_window_nums $slide_window_nums \
         --exp_type=$exp_type \
-        --permute 
+        --permute \
+        --to_grayscale
 fi

@@ -28,7 +28,7 @@ class Exp_image_classification(Exp_basic):
             # path = "/home/leo/breeze/NMI/code/uoro_pytorch/datasets"
         
         data_loader = Data_Factory(path=Path(path), num_worker=self.args.num_worker)
-        if data_name == "sequential_mnist":
+        if data_name in {"sequential_mnist", "cifar10"}:
             train_loader = data_loader.get_data_loader(
                 data_name=data_name,
                 mode="train", 
@@ -39,7 +39,9 @@ class Exp_image_classification(Exp_basic):
                 seq_mode=self.args.seq_mode,
                 download=True, 
                 permute=self.args.permute, 
-                permutation=self.permutation if self.args.permute else None
+                permutation=self.permutation if self.args.permute else None,
+                to_grayscale=self.args.to_grayscale,
+                normalize=self.args.normalize,
             )
             
             vali_loader = data_loader.get_data_loader(
@@ -52,7 +54,9 @@ class Exp_image_classification(Exp_basic):
                 seq_mode=self.args.seq_mode, 
                 download=True,
                 permute=self.args.permute, 
-                permutation=self.permutation if self.args.permute else None
+                permutation=self.permutation if self.args.permute else None,
+                to_grayscale=self.args.to_grayscale,
+                normalize=self.args.normalize,
             )
 
             test_loader = data_loader.get_data_loader(
@@ -63,8 +67,11 @@ class Exp_image_classification(Exp_basic):
                 seq_mode=self.args.seq_mode,
                 download=True,
                 permute=self.args.permute,
-                permutation=self.permutation if self.args.permute else None
+                permutation=self.permutation if self.args.permute else None,
+                to_grayscale=self.args.to_grayscale,
+                normalize=self.args.normalize
             )
+            
         return train_loader, vali_loader, test_loader
         
     def _build_model(self):
@@ -123,8 +130,8 @@ class Exp_image_classification(Exp_basic):
             if self.args.data_name == "sequential_mnist":
                 self.permutation = torch.randperm(784)
             elif self.args.data_name == "cifar10":
-                # XXX: 
-                self.permutation = torch.randperm(32*32*3)
+                # To grayscale and flatten the image, the input dimension is 32*32=1024
+                self.permutation = torch.randperm(32*32)
             else:
                 raise ValueError(f"{self.args.data_name} is not supported")
         else:

@@ -12,7 +12,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='SPTT and BPTT for classification')
     
     parser.add_argument('--data_name', type=str, default="AG_NEWS", required=True, 
-                        help="IMDB, sequential_mnist, cifar10, google_speech")
+                        help="IMDB, sequential_mnist, cifar10, google_speech, esc50, AG_NEWS, byte_imdb, nsynth")
     parser.add_argument('--model', type=str, default="BpttLSTM", required=True,
                         help="BpttLSTM, BpttGRU, SpttLSTM, SpttGRU, SpttLSTM_End, SpttGRU_End")
     parser.add_argument('--use_gpu', type=bool, default=True)
@@ -56,6 +56,10 @@ if __name__ == '__main__':
     parser.add_argument("--esc50_fold", type=int, default=1, help="ESC50 fold number for testing, default is 1")
     parser.add_argument("--n_fft", type=int, default=2048, help="feedforward network dimension for transformer model")
     parser.add_argument("--hop_length", type=int, default=512, help="hop length for STFT")
+    parser.add_argument("--to_grayscale", action="store_true", help="whether to convert image to grayscale")
+    parser.add_argument("--normalize", action="store_true", help="whether to normalize the data")
+    parser.add_argument("--nsynth_label_type", type=str, default="family", help="label type for NSynth dataset, including family, instrument, source")
+    parser.add_argument("--nsynth_config", type=str, default="full", help="configuration for NSynth dataset")
 
     args = parser.parse_args()
 
@@ -84,7 +88,7 @@ if __name__ == '__main__':
     
     if args.data_name in {'sequential_mnist', 'cifar10'}:
         exp = Exp_image_classification(args, args.device)
-    elif args.data_name in {'google_speech', 'esc50'}:
+    elif args.data_name in {'google_speech', 'esc50', 'nsynth'}:
         exp = Exp_audio_classification(args, args.device)
     elif args.data_name in {'imdb', 'ag_news', 'byte_imdb'}:
         exp = Exp_text_classification(args, args.device)

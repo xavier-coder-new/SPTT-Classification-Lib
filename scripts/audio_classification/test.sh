@@ -36,6 +36,19 @@ elif [[ "$data_name" = "esc50" ]]; then
     n_mels=128
     n_fft=2048
     hop_length=1024
+elif [[ "$data_name" = "nsynth" ]]; then
+    batch_size=64
+    feature_dim=64
+    output_dim=11
+    sample_rate=16000
+    n_mels=64
+    n_fft=1024
+    # hop_length smaller, the sequence length will be longer.
+    # hop_length=512
+    hop_length=160
+else
+    echo "Unsupported dataset: $data_name"
+    exit 1
 fi
 
 # Run training with or without validation set

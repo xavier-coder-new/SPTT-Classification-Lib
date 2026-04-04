@@ -188,6 +188,53 @@ class Data_Factory:
             "filename": filenames,
             "fold": torch.tensor(folds, dtype=torch.long),
         }
+        
+    def nsynth_collate_fn(self, batch):
+        feature_list = []
+        lengths = []
+        labels = []
+        sample_rates = []
+        label_names = []
+        nsynth_ids = []
+        pitches = []
+        velocities = []
+        instrument_family_ids = []
+        instrument_source_ids = []
+        instrument_label_ids = []
+
+        for item in batch:
+            waveform = item["waveform"]  # [1, T]
+            mel = self.mel_transform(waveform)          # [1, n_mels, time_frames]
+            mel = mel.squeeze(0).transpose(0, 1)       # [time_frames, n_mels]
+
+            feature_list.append(mel)
+            lengths.append(mel.size(0))
+            labels.append(item["label_id"])
+            sample_rates.append(item["sample_rate"])
+            label_names.append(item["label"])
+            nsynth_ids.append(item["nsynth_id"])
+            pitches.append(item["pitch"])
+            velocities.append(item["velocity"])
+            instrument_family_ids.append(item["instrument_family_id"])
+            instrument_source_ids.append(item["instrument_source_id"])
+            instrument_label_ids.append(item["instrument_label_id"])
+
+        padded_features = pad_sequence(feature_list, batch_first=True)
+
+        return {
+            "features": padded_features,   # [B, T, n_mels]
+            "lengths": torch.tensor(lengths, dtype=torch.long),
+            "label_id": torch.tensor(labels, dtype=torch.long),
+            "label": label_names,
+            "sample_rate": torch.tensor(sample_rates, dtype=torch.long),
+
+            "nsynth_id": nsynth_ids,
+            "pitch": torch.tensor(pitches, dtype=torch.long),
+            "velocity": torch.tensor(velocities, dtype=torch.long),
+            "instrument_family_id": torch.tensor(instrument_family_ids, dtype=torch.long),
+            "instrument_source_id": torch.tensor(instrument_source_ids, dtype=torch.long),
+            "instrument_label_id": torch.tensor(instrument_label_ids, dtype=torch.long),
+        }
 
     def _build_vocab_from_dataset(self, dataset, min_freq=1, specials=("<pad>", "<unk>")):
         counter = Counter()
@@ -403,6 +450,10 @@ class Data_Factory:
         fixed_length=None,
         length_mode="pad",
         esc50_fold=1,
+        to_grayscale=True,
+        normalize=False,
+        nsynth_label_type="family",
+        nsynth_config="full",
     ) -> torch.utils.data.DataLoader:
         
         """
@@ -437,6 +488,50 @@ class Data_Factory:
                 seq_mode=seq_mode,
                 permute=permute,
                 permutation=permutation
+            )
+
+            if mode in {"train", "training", "vali", "validation", "val"} and need_vali:
+                train_size = int((1 - vali_ratio) * len(dataset))
+                vali_size = len(dataset) - train_size
+                generator = torch.Generator().manual_seed(split_seed)
+                train_dataset, vali_dataset = torch.utils.data.random_split(
+                    dataset, [train_size, vali_size], generator=generator
+                )
+                dataset = train_dataset if mode in {"train", "training"} else vali_dataset
+
+            loader = DataLoader(
+                dataset=dataset,
+                batch_size=batch_size,
+                shuffle=shuffle,
+                drop_last=True,
+                num_workers=self.num_worker,
+                pin_memory=torch.cuda.is_available(),
+            )
+            return loader
+        
+        elif data_name == "cifar10":
+            if mode in {"train", "training"}:
+                is_train = True
+                shuffle = True
+            elif mode in {"vali", "validation", "val"}:
+                is_train = True
+                shuffle = False
+            elif mode in {"test", "testing"}:
+                is_train = False
+                shuffle = False
+            else:
+                raise ValueError("Invalid mode")
+
+            dataset = data_wrapper.SequentialCIFAR10Dataset(
+                path=path,
+                is_train=is_train,
+                need_vali=need_vali,
+                is_download=download,
+                seq_mode=seq_mode,
+                permute=permute,
+                permutation=permutation,
+                to_grayscale=to_grayscale,   # LRA-style default
+                normalize=normalize,
             )
 
             if mode in {"train", "training", "vali", "validation", "val"} and need_vali:
@@ -517,6 +612,36 @@ class Data_Factory:
                 num_workers=self.num_worker,
                 pin_memory=torch.cuda.is_available(),
                 collate_fn=self.esc50_collate_fn,
+            )
+            return loader
+        
+        elif data_name == "nsynth":
+            if mode in {"train", "training"}:
+                shuffle = True
+            elif mode in {"val", "validation", "vali", "valid"}:
+                shuffle = False
+            elif mode in {"test", "testing"}:
+                shuffle = False
+            else:
+                raise ValueError("Invalid mode")
+
+            dataset = data_wrapper.NSynthDataset(
+                path=path,
+                mode=mode,
+                sample_rate=self.sample_rate,
+                label_type=nsynth_label_type,
+                config_name=nsynth_config,
+                offline_first=offline,
+            )
+
+            loader = DataLoader(
+                dataset=dataset,
+                batch_size=batch_size,
+                shuffle=shuffle,
+                drop_last=(mode in {"train", "training"}),
+                num_workers=self.num_worker,
+                pin_memory=torch.cuda.is_available(),
+                collate_fn=self.nsynth_collate_fn,
             )
             return loader
 
