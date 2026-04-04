@@ -434,7 +434,200 @@ class ESC50Dataset(Dataset):
             "filename": item["filename"],
             "fold": int(item["fold"]),
         }
+        
+class NSynthDataset(Dataset):
+    def __init__(
+        self,
+        path,
+        mode="train",
+        sample_rate=16000,
+        label_type="family",   # "family" | "source" | "instrument"
+        config_name="full",
+        offline_first=True,
+    ):
+        """
+        Hugging Face / TFDS-style NSynth loader.
 
+        NSynth official fixed splits:
+            - train
+            - valid
+            - test
+
+        Recommended label_type:
+            - "family": 11-way classification
+            - "source": 3-way classification
+            - "instrument": 1006-way classification
+
+        Args:
+            path:
+                HF cache root directory, e.g. "./datasets"
+            mode:
+                - "train" / "training"
+                - "val" / "vali" / "validation" / "valid"
+                - "test" / "testing"
+            sample_rate:
+                target sampling rate
+            label_type:
+                classification target
+            config_name:
+                NSynth config name, default "full"
+            offline_first:
+                first try reusing local HF cache
+        """
+        self.path = path
+        self.sample_rate = sample_rate
+        self.label_type = str(label_type).lower()
+        self.config_name = config_name
+        self.offline_first = offline_first
+
+        mode = mode.lower()
+        if mode in {"train", "training"}:
+            self.split = "train"
+            self.mode = "train"
+        elif mode in {"val", "vali", "validation", "valid"}:
+            self.split = "valid"
+            self.mode = "validation"
+        elif mode in {"test", "testing"}:
+            self.split = "test"
+            self.mode = "test"
+        else:
+            raise ValueError(f"Invalid mode: {mode}")
+
+        if self.label_type not in {"family", "source", "instrument"}:
+            raise ValueError("label_type must be one of {'family', 'source', 'instrument'}")
+
+        self.dataset = self._load_nsynth_dataset()
+
+        required_cols = {"audio", "id", "instrument", "pitch", "velocity"}
+        missing_cols = required_cols - set(self.dataset.column_names)
+        if missing_cols:
+            raise ValueError(f"Missing required columns in NSynth dataset: {missing_cols}")
+
+        # make audio auto-resample on access
+        self.dataset = self.dataset.cast_column("audio", Audio(sampling_rate=sample_rate))
+
+        self._build_label_metadata()
+
+    def _load_nsynth_dataset(self):
+        if self.offline_first:
+            try:
+                print(f"[NSYNTH] Trying offline HF cache from: {self.path}")
+                dataset = load_dataset(
+                    "jg583/NSynth",
+                    self.config_name,
+                    split=self.split,
+                    cache_dir=str(self.path),
+                    download_mode="reuse_dataset_if_exists",
+                    trust_remote_code=True,
+                )
+                print("[NSYNTH] Loaded from existing HF cache or local processed cache.")
+                return dataset
+            except Exception as e:
+                print(f"[NSYNTH] Offline-first cache load failed: {e}")
+                print("[NSYNTH] Falling back to normal load_dataset(...).")
+
+        dataset = load_dataset(
+            "jg583/NSynth",
+            self.config_name,
+            split=self.split,
+            cache_dir=str(self.path),
+            trust_remote_code=True,
+        )
+        print("[NSYNTH] Loaded with normal load_dataset().")
+        return dataset
+
+    def _build_label_metadata(self):
+        """
+        Build label name/id mappings for the selected label granularity.
+        """
+        # fixed mappings from NSynth dataset card / TFDS
+        family_id_to_name = {
+            0: "bass",
+            1: "brass",
+            2: "flute",
+            3: "guitar",
+            4: "keyboard",
+            5: "mallet",
+            6: "organ",
+            7: "reed",
+            8: "string",
+            9: "synth_lead",
+            10: "vocal",
+        }
+
+        source_id_to_name = {
+            0: "acoustic",
+            1: "electronic",
+            2: "synthetic",
+        }
+
+        if self.label_type == "family":
+            self.index_to_label = family_id_to_name
+            self.label_to_index = {v: k for k, v in family_id_to_name.items()}
+        elif self.label_type == "source":
+            self.index_to_label = source_id_to_name
+            self.label_to_index = {v: k for k, v in source_id_to_name.items()}
+        else:
+            # instrument label is a fine-grained class id (0..1005)
+            # Names are not guaranteed to be human-readable in the HF sample itself,
+            # so here we expose them as instrument_<id>.
+            instrument_ids = sorted({int(x["label"]) for x in self.dataset["instrument"]})
+            self.index_to_label = {idx: f"instrument_{idx}" for idx in instrument_ids}
+            self.label_to_index = {v: k for k, v in self.index_to_label.items()}
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def _extract_label(self, item):
+        instrument_info = item["instrument"]
+
+        if self.label_type == "family":
+            label_id = int(instrument_info["family"])
+            label_name = self.index_to_label[label_id]
+        elif self.label_type == "source":
+            label_id = int(instrument_info["source"])
+            label_name = self.index_to_label[label_id]
+        else:
+            label_id = int(instrument_info["label"])
+            label_name = self.index_to_label[label_id]
+
+        return label_name, label_id
+
+    def __getitem__(self, index):
+        item = self.dataset[index]
+
+        audio_info = item["audio"]
+        waveform = torch.tensor(audio_info["array"], dtype=torch.float32)
+
+        if waveform.dim() == 1:
+            waveform = waveform.unsqueeze(0)  # [1, T]
+        elif waveform.dim() == 2:
+            pass
+        else:
+            raise ValueError(f"Unexpected waveform shape: {waveform.shape}")
+
+        # safety: collapse multi-channel if needed
+        if waveform.size(0) > 1:
+            waveform = waveform.mean(dim=0, keepdim=True)
+
+        label_name, label_id = self._extract_label(item)
+
+        instrument_info = item["instrument"]
+
+        return {
+            "waveform": waveform,                               # [1, T]
+            "sample_rate": int(audio_info["sampling_rate"]),
+            "label": label_name,
+            "label_id": label_id,
+
+            # extra metadata
+            "nsynth_id": item["id"],
+            "pitch": int(item["pitch"]),
+            "velocity": int(item["velocity"]),
+            "instrument_family_id": int(instrument_info["family"]),
+            "instrument_source_id": int(instrument_info["source"]),
+            "instrument_label_id": int(instrument_info["label"]),
+        }
 
 class IMDBDataset(Dataset):
     def __init__(
