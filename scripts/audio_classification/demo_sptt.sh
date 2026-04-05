@@ -3,7 +3,7 @@
 export CUDA_VISIBLE_DEVICES=0
 
 model=SpttLSTM
-data_name=nsynth
+data_name=esc50
 seed=2025
 epochs=300
 patience=30
@@ -76,4 +76,5 @@ python -m run \
     --sample_rate $sample_rate \
     --n_fft $n_fft \
     --hop_length $hop_length \
+    --run_five_fold
 

@@ -74,5 +74,6 @@ python -m run \
     --n_mels $n_mels \
     --sample_rate $sample_rate \
     --n_fft $n_fft \
-    --hop_length $hop_length
+    --hop_length $hop_length \
+    --run_five_fold
 
