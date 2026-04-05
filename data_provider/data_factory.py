@@ -60,6 +60,10 @@ class Data_Factory:
         self.byte_imdb_pad_idx = 0
         self.byte_imdb_vocab_size = 257
         self.byte_imdb_eos_idx = None
+        
+        self.listops_vocab = None
+        self.listops_pad_idx = 0
+        self.listops_unk_idx = 1
 
 
     # def speech_commands_collate_fn(self, batch):
@@ -262,6 +266,12 @@ class Data_Factory:
         self.ag_news_vocab = vocab
         self.ag_news_pad_idx = vocab["<pad>"]
         self.ag_news_unk_idx = vocab["<unk>"]
+    
+    def build_listops_vocab(self, dataset, min_freq=1, special_tokens=("<pad>", "<unk>")):
+        vocab = self._build_vocab_from_dataset(dataset, min_freq=min_freq, specials=special_tokens)
+        self.listops_vocab = vocab
+        self.listops_pad_idx = vocab["<pad>"]
+        self.listops_unk_idx = vocab["<unk>"]
 
     def imdb_collate_fn(self, batch):
         if self.imdb_vocab is None:
@@ -317,6 +327,38 @@ class Data_Factory:
             sequence_list,
             batch_first=True,
             padding_value=self.ag_news_pad_idx,
+        )
+
+        return {
+            "input_ids": padded_sequences,
+            "lengths": torch.tensor(lengths, dtype=torch.long),
+            "label_id": torch.tensor(labels, dtype=torch.long),
+            "label": label_names,
+            "text": texts,
+        }
+    
+    def listops_collate_fn(self, batch):
+        if self.listops_vocab is None:
+            raise ValueError("Long ListOps vocab has not been built.")
+
+        sequence_list = []
+        lengths = []
+        labels = []
+        label_names = []
+        texts = []
+
+        for item in batch:
+            token_ids = torch.tensor(self.listops_vocab(item["tokens"]), dtype=torch.long)
+            sequence_list.append(token_ids)
+            lengths.append(len(token_ids))
+            labels.append(item["label_id"])
+            label_names.append(item["label"])
+            texts.append(item["text"])
+
+        padded_sequences = pad_sequence(
+            sequence_list,
+            batch_first=True,
+            padding_value=self.listops_pad_idx,
         )
 
         return {
@@ -639,7 +681,7 @@ class Data_Factory:
                 batch_size=batch_size,
                 shuffle=shuffle,
                 drop_last=(mode in {"train", "training"}),
-                num_workers=self.num_worker,
+                num_workers=0,
                 pin_memory=torch.cuda.is_available(),
                 collate_fn=self.nsynth_collate_fn,
             )
@@ -812,5 +854,53 @@ class Data_Factory:
             )
             return loader
 
+        elif data_name == "long_listops":
+            if length_mode == "pad":
+                collate_fn = self.listops_collate_fn
+            else:
+                raise ValueError("Long ListOps currently only supports length_mode='pad'")
+
+            if mode in {"train", "training"}:
+                split = "train"
+                shuffle = True
+            elif mode in {"vali", "validation", "val"}:
+                split = "val"
+                shuffle = False
+            elif mode in {"test", "testing"}:
+                split = "test"
+                shuffle = False
+            else:
+                raise ValueError("Invalid mode")
+
+            dataset = data_wrapper.LongListOpsDataset(
+                path=path,
+                split=split,
+                max_length=max_length,
+                offline_first=offline,
+                # If you have other tasks in the future, you can change them to parameters
+                task_name="basic",   
+            )
+
+            if self.listops_vocab is None:
+                vocab_dataset = data_wrapper.LongListOpsDataset(
+                    path=path,
+                    split="train",
+                    max_length=max_length,
+                    offline_first=offline,
+                    task_name="basic",
+                )
+                self.build_listops_vocab(vocab_dataset, min_freq=min_freq)
+
+            loader = DataLoader(
+                dataset=dataset,
+                batch_size=batch_size,
+                shuffle=shuffle,
+                drop_last=(mode in {"train", "training"}),
+                num_workers=self.num_worker,
+                pin_memory=torch.cuda.is_available(),
+                collate_fn=collate_fn,
+            )
+            return loader
+        
         else:
             raise ValueError("Invalid data name")
