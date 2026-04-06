@@ -13,7 +13,7 @@ learning_rate=0.001
 hidden_dim=512
 embed_dim=256
 num_layers=1
-krank=7
+krank=6
 # pixel, row
 vali_ratio=0.1
 exp_type=text
