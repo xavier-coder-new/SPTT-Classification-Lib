@@ -2,18 +2,18 @@
 
 export CUDA_VISIBLE_DEVICES=0
 
-models=("SpttLSTM" "BpttLSTM" "SpttLSTM_End" "SpttGRU" "BpttGRU" "SpttGRU_End")
-data_names=("sequential_mnist")
-seeds=(2020 2021 2022 2023 2024 2025)
-epochs=300
-patience=30
+models=("SpttLSTM")
+data_names=("cifar10")
+seeds=(2023)
+epochs=500
+patience=40
 # 1 represents no truncation, and the model will process the whole sequence at once.
 truncate_num=1
 # batch_size=128
 batch_size=256
 # learning_rate=0.005
 # for 0.01, the SpttLSTM encountered the error, which One of values of Sigma_ih is nan in 5090 server.
-learning_rate=0.001
+# learning_rate=0.001
 num_layers=1
 krank=1
 slide_window_nums=1
@@ -28,6 +28,16 @@ args=(
 for data_name in "${data_names[@]}"; do
   for seed in "${seeds[@]}"; do
     for model in "${models[@]}"; do
+        if [[ "$model" = "SpttLSTM" ]]; then
+            learning_rate=0.005
+            epochs=1000
+            patience=100
+        elif [[ "$model" = "BpttLSTM" ]]; then
+            learning_rate=0.001
+            epochs=1000
+            patience=100
+        fi
+
         job_name="image_classification---${model}---${data_name}---${seed}"
         echo "--------------------------------------------------------------"
         echo "Running job: ${job_name}"

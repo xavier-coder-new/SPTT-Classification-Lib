@@ -22,18 +22,34 @@ length_mode=pad
 max_length="${12}"
 fixed_length="${13}"
 
-if [[ "$data_name" = "imdb" || "$data_name" = "byte_imdb" ]]; then
-    batch_size=128
+if [[ "$data_name" = "imdb" ]]; then
+    batch_size=256
     feature_dim=$embed_dim
     output_dim=2
     need_vali=True
+    max_length=None
+    fixed_length=None
+elif [[ "$data_name" = "byte_imdb" ]]; then
+    batch_size=256
+    feature_dim=$embed_dim
+    output_dim=2
+    need_vali=True
+    max_length=4000
+    fixed_length=4000
 elif [[ "$data_name" = "ag_news" ]]; then
-    batch_size=128
+    batch_size=256
     feature_dim=$embed_dim
     output_dim=4
     need_vali=True
     max_length=None
     fixed_length=None
+elif [[ "$data_name" = "long_listops" ]]; then
+    batch_size=256
+    feature_dim=$embed_dim
+    output_dim=10
+    need_vali=True
+    max_length=2000
+    fixed_length=2000
 fi
 
 # Run training with or without validation set
