@@ -30,7 +30,7 @@ class Exp_text_classification(Exp_basic):
             mode="train", 
             offline=self.args.offline,
             batch_size=self.args.batch_size,
-            path=Path("/mnt/hard_disk/weihao/SPTT-Classification-Lib/datasets"),
+            path=Path("/home/leo/breeze/NMI/code/sptt_cla/datasets"),
             need_vali=self.args.need_vali,
             vali_ratio=self.args.vali_ratio,
             split_seed=self.args.seed,
@@ -45,7 +45,7 @@ class Exp_text_classification(Exp_basic):
             mode="vali",
             offline=self.args.offline,
             batch_size=self.args.batch_size,
-            path=Path("/mnt/hard_disk/weihao/SPTT-Classification-Lib/datasets"),
+            path=Path("/home/leo/breeze/NMI/code/sptt_cla/datasets"),
             need_vali=self.args.need_vali,
             vali_ratio=self.args.vali_ratio,
             split_seed=self.args.seed,
@@ -60,7 +60,7 @@ class Exp_text_classification(Exp_basic):
             mode="test",
             offline=self.args.offline,
             batch_size=self.args.batch_size,
-            path=Path("/mnt/hard_disk/weihao/SPTT-Classification-Lib/datasets"),
+            path=Path("/home/leo/breeze/NMI/code/sptt_cla/datasets"),
             need_vali=False,
             download=True,
             max_length=self.args.max_length,
@@ -81,6 +81,10 @@ class Exp_text_classification(Exp_basic):
             self.args.input_type = "text"
             self.args.vocab_size = data_loader.byte_imdb_vocab_size
             self.args.pad_idx = data_loader.byte_imdb_pad_idx
+        elif data_name.lower() == "long_listops":
+            self.args.input_type = "text"
+            self.args.vocab_size = len(data_loader.listops_vocab)
+            self.args.pad_idx = data_loader.listops_pad_idx
         else:
             self.args.input_type = "feature"
         

@@ -7,7 +7,7 @@ from datasets import load_dataset, load_from_disk, Audio, Dataset as HFDataset
 import torchaudio
 import os
 import pandas as pd
-
+from pathlib import Path
 def basic_english_tokenizer(text: str):
     """
     A lightweight tokenizer similar to basic_english.
@@ -17,6 +17,19 @@ def basic_english_tokenizer(text: str):
     text = re.sub(r"[^a-z0-9'.,!?;:()\- ]+", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text.split()
+
+def listops_tokenizer(text: str):
+    """
+    Tokenizer for LRA Long ListOps.
+    Keep operators / brackets / parentheses / digits as separate tokens.
+    Example:
+        "( ( [MAX 2 9 ] ) 4 )"
+    """
+    # delete whitespace at the beginning and end of the text
+    text = text.strip()
+    # extract [MIN [MAX [MED [SM ] ( ) and number
+    tokens = re.findall(r"\[MIN|\[MAX|\[MED|\[SM|\]|\(|\)|\d+", text)
+    return tokens
 
 
 class SequentialMNISTDataset(Dataset):
@@ -312,6 +325,7 @@ class ESC50Dataset(Dataset):
         mode="train",
         sample_rate=16000,
         fold=None,
+        val_fold=None,
         offline_first=True,
     ):
         """
@@ -329,15 +343,18 @@ class ESC50Dataset(Dataset):
             fold:
                 ESC-50 uses 5 folds. We use:
                     test fold = fold
-                    val fold  = ((fold % 5) + 1)
+                    val fold  = self.val_fold
                     train     = remaining 3 folds
                 Default fold = 1
+            val_fold:
+                Specific validation fold to use
             offline_first:
                 first try reusing local HF cache
         """
         self.path = path
         self.sample_rate = sample_rate
         self.fold = 1 if fold is None else int(fold)
+        self.val_fold = ((self.fold % 5) + 1) if val_fold is None else int(val_fold)
         self.offline_first = offline_first
 
         if self.fold not in {1, 2, 3, 4, 5}:
@@ -361,7 +378,7 @@ class ESC50Dataset(Dataset):
             raise ValueError(f"Missing required columns in ashraq/esc50: {missing_cols}")
 
         test_fold = self.fold
-        val_fold = (self.fold % 5) + 1
+        val_fold = self.val_fold
 
         if self.mode == "test":
             self.dataset = self.dataset.filter(lambda x: x["fold"] == test_fold)
@@ -496,7 +513,8 @@ class NSynthDataset(Dataset):
         if self.label_type not in {"family", "source", "instrument"}:
             raise ValueError("label_type must be one of {'family', 'source', 'instrument'}")
 
-        self.dataset = self._load_nsynth_dataset()
+        # self.dataset = self._load_nsynth_dataset()
+        self.dataset = self._load_nstynth_dataset_v2()
 
         required_cols = {"audio", "id", "instrument", "pitch", "velocity"}
         missing_cols = required_cols - set(self.dataset.column_names)
@@ -535,7 +553,25 @@ class NSynthDataset(Dataset):
         )
         print("[NSYNTH] Loaded with normal load_dataset().")
         return dataset
+    
+    def _load_nstynth_dataset_v2(self):
+        # get the path to the current directory
+        current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # get the absolute path of the dataset
+        dataset_path = os.path.join(current_dir, "datasets", "NSynth_dataset")
+        
+        dataset = load_dataset(
+            dataset_path,
+            self.config_name,
+            split=self.split,
+            cache_dir=str(self.path),
+            trust_remote_code=True,
+        )
 
+        # check the information of the dataset
+        print(dataset)
+        
+        return dataset
     def _build_label_metadata(self):
         """
         Build label name/id mappings for the selected label granularity.
@@ -887,3 +923,109 @@ class ByteIMDBDataset(Dataset):
             "label": self.index_to_label[label],
             "label_id": self.label_to_index[label],
         }
+        
+class LongListOpsDataset(Dataset):
+    def __init__(
+        self,
+        path,
+        split="train",
+        max_length=2000,
+        offline_first=True,
+        task_name="basic",
+    ):
+        """
+        Long ListOps dataset loader for LRA-style TSV files.
+
+        Expected TSV columns:
+            - Source: expression string
+            - Target: label (0~9)
+
+        Common file names:
+            basic_train.tsv / basic_val.tsv / basic_test.tsv
+            train.tsv / val.tsv / test.tsv
+            train.csv / val.csv / test.csv   # if user converted formats manually
+        """
+        self.path = Path(path) / "long_listops"
+        self.split = split.lower()
+        self.max_length = max_length
+        self.offline_first = offline_first
+        self.task_name = task_name
+
+        if self.split in {"validation", "vali"}:
+            self.split = "val"
+        elif self.split in {"testing"}:
+            self.split = "test"
+
+        if self.split not in {"train", "val", "test"}:
+            raise ValueError(f"Invalid split: {split}")
+
+        # ListOps labels are 0~9
+        self.label_to_index = {i: i for i in range(10)}
+        self.index_to_label = {i: str(i) for i in range(10)}
+
+        self.data = self._load_listops_data()
+
+    def _resolve_file_path(self):
+        candidates = [
+            os.path.join(self.path, f"{self.task_name}_{self.split}.tsv"),
+            os.path.join(self.path, f"{self.split}.tsv"),
+            os.path.join(self.path, f"{self.task_name}_{self.split}.csv"),
+            os.path.join(self.path, f"{self.split}.csv"),
+        ]
+
+        for fp in candidates:
+            if os.path.exists(fp):
+                return fp
+
+        raise FileNotFoundError(
+            f"Cannot find Long ListOps split file for split='{self.split}' under: {self.path}\n"
+            f"Tried: {candidates}"
+        )
+
+    def _load_listops_data(self):
+        file_path = self._resolve_file_path()
+
+        sep = "\t" if file_path.endswith(".tsv") else ","
+        df = pd.read_csv(file_path, sep=sep)
+
+        # 兼容大小写
+        rename_map = {}
+        for col in df.columns:
+            low = col.lower()
+            if low == "source":
+                rename_map[col] = "Source"
+            elif low == "target":
+                rename_map[col] = "Target"
+
+        df = df.rename(columns=rename_map)
+
+        if "Source" not in df.columns or "Target" not in df.columns:
+            raise ValueError(
+                f"Long ListOps file must contain 'Source' and 'Target' columns, got: {list(df.columns)}"
+            )
+
+        records = []
+        for _, row in df.iterrows():
+            text = str(row["Source"]).strip()
+            label_id = int(row["Target"])
+
+            tokens = listops_tokenizer(text)
+            if self.max_length is not None:
+                tokens = tokens[:self.max_length]
+
+            records.append({
+                "text": text,
+                "tokens": tokens,
+                "label": self.index_to_label[label_id],
+                "label_id": label_id,
+            })
+
+        return records
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, index):
+        return self.data[index]
+        
+        

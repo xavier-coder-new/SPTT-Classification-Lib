@@ -7,12 +7,14 @@ from tools.utils import set_seed
 from exp.exp_image_classification import Exp_image_classification
 from exp.exp_audio_classification import Exp_audio_classification
 from exp.exp_text_classification import Exp_text_classification
+from exp.exp_audio_classification_5fold import Exp_audio_classification_5fold
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='SPTT and BPTT for classification')
     
     parser.add_argument('--data_name', type=str, default="AG_NEWS", required=True, 
-                        help="IMDB, sequential_mnist, cifar10, google_speech, esc50, AG_NEWS, byte_imdb, nsynth")
+                        help="IMDB, sequential_mnist, cifar10, google_speech, esc50, \
+                        AG_NEWS, byte_imdb, nsynth, long_listops")
     parser.add_argument('--model', type=str, default="BpttLSTM", required=True,
                         help="BpttLSTM, BpttGRU, SpttLSTM, SpttGRU, SpttLSTM_End, SpttGRU_End")
     parser.add_argument('--use_gpu', type=bool, default=True)
@@ -59,8 +61,9 @@ if __name__ == '__main__':
     parser.add_argument("--to_grayscale", action="store_true", help="whether to convert image to grayscale")
     parser.add_argument("--normalize", action="store_true", help="whether to normalize the data")
     parser.add_argument("--nsynth_label_type", type=str, default="family", help="label type for NSynth dataset, including family, instrument, source")
-    parser.add_argument("--nsynth_config", type=str, default="full", help="configuration for NSynth dataset")
-
+    parser.add_argument("--nsynth_config", type=str, default="default", help="configuration for NSynth dataset")
+    parser.add_argument("--run_five_fold", action="store_true", help="whether to run 5-fold cross validation for ESC50 dataset")
+    
     args = parser.parse_args()
 
     global_vars.krank = args.krank
@@ -79,8 +82,11 @@ if __name__ == '__main__':
     
     
     if args.use_gpu and torch.cuda.is_available():
-        args.device = torch.device("cuda:{}".format(args.gpu_id))
-        print('Using GPU')
+        args.device = torch.device(f"cuda:{args.gpu_id}")
+        print("Using GPU")
+    else:
+        args.device = torch.device("cpu")
+        print("Using CPU")
     
     if args.truncate_num > 1:
         if args.slide_window_nums > 1:
@@ -88,10 +94,12 @@ if __name__ == '__main__':
     
     if args.data_name in {'sequential_mnist', 'cifar10'}:
         exp = Exp_image_classification(args, args.device)
-    elif args.data_name in {'google_speech', 'esc50', 'nsynth'}:
+    elif args.data_name in {'google_speech', 'nsynth'}:
         exp = Exp_audio_classification(args, args.device)
-    elif args.data_name in {'imdb', 'ag_news', 'byte_imdb'}:
+    elif args.data_name in {'imdb', 'ag_news', 'byte_imdb', 'long_listops'}:
         exp = Exp_text_classification(args, args.device)
+    elif args.data_name in {'esc50'}:
+        exp = Exp_audio_classification_5fold(args, args.device)
     else:
         raise ValueError(f"Unsupported Experiment: {args.data_name}")
 
@@ -100,11 +108,16 @@ if __name__ == '__main__':
     else:
         print(f"Truncation enabled, the truncation number is {args.truncate_num}")
 
-    print(f">>>>>>>start training : {args.model} on {args.data_name} with seed {args.seed}-Epochs-{args.epochs}-Patience-{args.patience}<<<<<")
-    best_model_path, test_loader, num_chunks = exp.train()
-    
-    print(f">>>>>>>start testing : {args.model} on {args.data_name} with seed {args.seed}-Epochs-{args.epochs}-Patience-{args.patience}<<<<<")
-    exp.test(best_model_path, test_loader, num_chunks)
+    print(f">>>>>>>start experiment : {args.model} on {args.data_name} with seed {args.seed}-Epochs-{args.epochs}-Patience-{args.patience}<<<<<")
+
+    if args.data_name in {"esc50"}:
+        result = exp.run()
+        print("ESC50 result:", result)
+    else:
+        best_model_path, test_loader, num_chunks = exp.train()
+
+        print(f">>>>>>>start testing : {args.model} on {args.data_name} with seed {args.seed}-Epochs-{args.epochs}-Patience-{args.patience}<<<<<")
+        exp.test(best_model_path, test_loader, num_chunks)
 
     if args.gpu_type == 'mps':
         torch.backends.mps.empty_cache()
