@@ -269,6 +269,11 @@ class Exp_image_classification(Exp_basic):
                         #         cell0.X_matrix_ih[0, 0].item(),
                         #         cell0.Sigma_ih[0].item(),
                         #         cell0.Delta_matrix_ih[0, 0].item())
+                        
+                        if self.args.model in {"BpttLSTM", "SpttLSTM"} and self.args.gradient_clip:
+                            print("Gradient clipping")
+                            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                        
                         optimizer.step()
                         
                         sequence_loss += loss.item()

@@ -63,6 +63,7 @@ if __name__ == '__main__':
     parser.add_argument("--nsynth_label_type", type=str, default="family", help="label type for NSynth dataset, including family, instrument, source")
     parser.add_argument("--nsynth_config", type=str, default="default", help="configuration for NSynth dataset")
     parser.add_argument("--run_five_fold", action="store_true", help="whether to run 5-fold cross validation for ESC50 dataset")
+    parser.add_argument("--gradient_clip", action="store_true", help="whether to use gradient clipping")
     
     args = parser.parse_args()
 
@@ -70,6 +71,7 @@ if __name__ == '__main__':
     
     torch.set_num_threads(args.threads)
     set_seed(args.seed)
+    print("******Whether to use gradient clipping:*******", args.gradient_clip)
     
     if args.exp_type == "text":
         args.input_type = "text"
