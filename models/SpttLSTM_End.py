@@ -487,7 +487,8 @@ class LSTMCellFunction(torch.autograd.Function):
             inv_Sigma_matrix_hh = torch.inverse(Sigma_matrix_hh)
 
             with torch.no_grad():
-                num_blocks = math.ceil(T / t)
+                # num_blocks = math.ceil(T / t)
+                num_blocks = T // t
                 for i in range(1, num_blocks + 1):
                     start_idx = (i - 1) * t
                     end_idx = min(i * t, T)
@@ -498,7 +499,7 @@ class LSTMCellFunction(torch.autograd.Function):
 
                     block_len = activation_input.size(0)
                     if block_len == 0:
-                        continue
+                        raise ValueError("block_len is 0")
 
                     scale_factor_right_ih = delta_block @ Delta_matrix_ih / block_len
                     scale_factor_left_ih = activation_input @ X_matrix_ih / block_len

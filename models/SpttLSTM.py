@@ -491,7 +491,8 @@ class LSTMCellFunction(torch.autograd.Function):
             
             start_time = time.time()
             with torch.no_grad():
-                num_blocks = math.ceil(T / t)
+                # num_blocks = math.ceil(T / t)
+                num_blocks = T // t
                 for i in range(1, num_blocks + 1):
                     # print("运行")
                     start_idx = (i - 1) * t
