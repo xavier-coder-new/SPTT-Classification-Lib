@@ -193,6 +193,7 @@ class Exp_image_classification(Exp_basic):
                     # Reset the RNN state and cache logits before each batch starts
                     self.model.model.reset_state(batch_size)
                     self.model.reset_logits()
+                    batch_final_logits = None
                     
                     # Verify that all hidden states and cell states are reset to zeros
                     assert self.model.model.hx_list is None or all(torch.all(hx == 0) for hx in self.model.model.hx_list), \
@@ -255,36 +256,43 @@ class Exp_image_classification(Exp_basic):
                             
                         optimizer.zero_grad()
                         
-                        output = self.model(
+                        output, loss_mask, final_step_mask = self.model(
                             inputs=inputs,
                             actual_length=chunk_actual_length,
                             sequence_length=chunk_T,
                             ended_in_chunk=end_in_chunked,
                         )
-                        
-                        loss =self.criterion(output, batch_y)
-                        loss.backward()
-                        
-                        # print("after update:",
-                        #         cell0.X_matrix_ih[0, 0].item(),
-                        #         cell0.Sigma_ih[0].item(),
-                        #         cell0.Delta_matrix_ih[0, 0].item())
-                        
-                        if self.args.model in {"BpttLSTM", "SpttLSTM"} and self.args.gradient_clip:
-                            print("Gradient clipping")
-                            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                        
-                        optimizer.step()
-                        
-                        sequence_loss += loss.item()
-                        num_chunks += 1
+
+                        if batch_final_logits is None:
+                            batch_final_logits = torch.zeros_like(output)
+
+                        # 对于在当前 chunk 到达最终有效位置的样本，记录它们的最终 logits
+                        if final_step_mask.any():
+                            batch_final_logits[final_step_mask] = output[final_step_mask].detach()
+
+                        if loss_mask.any():
+                            loss = self.criterion(output[loss_mask], batch_y[loss_mask])
+                            loss.backward()
+                            optimizer.step()
+
+                            sequence_loss += loss.item()
+                            num_chunks += 1
+                        else:
+                            loss = torch.tensor(0.0, device=self.device)
                         
                         self.model.model.detach_state()
-                
+
+                    if batch_final_logits is None:
+                        batch_final_logits = output.detach()
+                    else:
+                        not_finished = ~self.model.finished_mask
+                        if not_finished.any():
+                            batch_final_logits[not_finished] = output[not_finished].detach()
+                    
                     batch_loss = sequence_loss / max(1, num_chunks)
                     epoch_loss.append(batch_loss)
                     
-                    batch_correct, batch_total = calculate_accuracy(output, batch_y)
+                    batch_correct, batch_total = calculate_accuracy(batch_final_logits, batch_y)
                     batch_acc = batch_correct / batch_total
                     
                     epoch_correct_num += batch_correct
@@ -381,7 +389,7 @@ class Exp_image_classification(Exp_basic):
                 # inputs= [batch_x[:, t, :] for t in range(sequence_length)]
                 inputs = self._split_time_steps(batch_x)
                 
-                output = self.model(
+                output, _, _ = self.model(
                     inputs=inputs,
                     actual_length=actual_length,
                     sequence_length=sequence_length,
@@ -438,7 +446,7 @@ class Exp_image_classification(Exp_basic):
                 # inputs= [batch_x[:, t, :] for t in range(sequence_length)]
                 inputs = self._split_time_steps(batch_x)
                 
-                output = self.model(
+                output, _, _ = self.model(
                     inputs=inputs,
                     actual_length=actual_length,
                     sequence_length=sequence_length,

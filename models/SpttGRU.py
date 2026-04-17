@@ -151,23 +151,32 @@ class Model(nn.Module):
             # True for finished, False for unfinished
             self.finished_mask = torch.zeros(B, device=device, dtype=torch.bool)
         
+        prev_finished_mask = self.finished_mask.clone()
         # For samples that have already ended before the current chunk, we need to keep the logits remain frozen.
         effective_logits = output.clone()
-        if self.finished_mask.any():
+        
+        if prev_finished_mask.any():
             # if there are already finished samples, we need to overwrite the current output of these samples with the previously saved final_logits
             # make sure the finished samples will not make new logits.
-            effective_logits[self.finished_mask] = self.final_logits[self.finished_mask]
+            effective_logits[prev_finished_mask] = self.final_logits[prev_finished_mask]
         
         # For the newly concluded samples in the current chunk, record and freeze the logits.
         # Find the "newly ended sample of the current chunk" (previously not ended ∧ currently ended)
-        newly_finished = ended_in_chunk & (~self.finished_mask)
+        newly_finished = ended_in_chunk & (~prev_finished_mask)
         if newly_finished.any():
-            self.final_logits[newly_finished] = output[newly_finished]
+            self.final_logits[newly_finished] = output[newly_finished].detach()
             self.finished_mask[newly_finished] = True
-            effective_logits[newly_finished] = self.final_logits[newly_finished]
-            
-        return effective_logits
-
+            effective_logits[newly_finished] = output[newly_finished]
+        
+        # 当前 chunk 应该参与 loss 的样本：
+        # 1) 之前没结束的样本（包括当前 newly_finished）
+        # 2) 已经在更早 chunk 结束的样本不再参与
+        loss_mask = ~prev_finished_mask
+        
+        # 当前 chunk 内哪些样本到达了最终有效位置
+        final_step_mask = ended_in_chunk
+        
+        return effective_logits, loss_mask, final_step_mask
 
 class CustomGRU(nn.Module):
     def __init__(self, args, input_dim):
