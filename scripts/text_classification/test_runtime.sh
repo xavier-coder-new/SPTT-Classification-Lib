@@ -21,24 +21,8 @@ slide_window_nums=${11}
 # pad, repeat
 # length_mode=pad
 length_mode=repeat
-# max_length=1200
-# fixed_length=800
 
-if [[ "$data_name" = "imdb" ]]; then
-    batch_size=256
-    feature_dim=$embed_dim
-    output_dim=2
-    need_vali=True
-    max_length=None
-    fixed_length=None
-elif [[ "$data_name" = "byte_imdb" ]]; then
-    batch_size=256
-    feature_dim=$embed_dim
-    output_dim=2
-    need_vali=True
-    max_length=${12}
-    fixed_length=${13}
-elif [[ "$data_name" = "ag_news" ]]; then
+if [[ "$data_name" = "ag_news" ]]; then
     batch_size=256
     feature_dim=$embed_dim
     output_dim=4

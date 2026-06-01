@@ -3,24 +3,19 @@ import torch.nn as nn
 import math
 from tools.Timers import Timers
 import time
-from tools.GradientAccumulator_Hybrid import GradientAccumulator
+from tools.GradientAccumulator_Hybrid_LSTM import GradientAccumulator
 from icecream import ic
 from tools.sptt_compute_profiler import SPTTComputeProfiler
 
 timers = Timers()
 
 def qr_with_non_negative_diagonal(matrix):
-    # 进行QR分解
     Q, R = torch.linalg.qr(matrix)
     
-    # 获取 R 矩阵对角线元素的符号
     diagonal_sign = torch.sign(torch.diag(R))
-    
-    # 避免对角线元素为零的情况
+
     diagonal_sign[diagonal_sign == 0] = 1
-    # ic(diagonal_sign)
-    
-    # 调整 Q 矩阵的列符号和Q = Q * diagonal_sign得到的结果一样。
+
     Q1 = Q * diagonal_sign.unsqueeze(0)
     
     R = diagonal_sign.unsqueeze(1) * R
@@ -31,7 +26,6 @@ def QR_matrix(X_matrix, target_shape):
     Q, R, diagonal_sign = qr_with_non_negative_diagonal(X_matrix)
     
     if Q.shape != target_shape:
-        # 进入这个会出现nan数值错误
         raise ValueError(f"QR shape mismatch: got {Q.shape}, expected {target_shape}")
 
     return Q, R, diagonal_sign
@@ -158,12 +152,8 @@ class Model(nn.Module):
             self.finished_mask[newly_finished] = True
             effective_logits[newly_finished] = output[newly_finished]
         
-        # 当前 chunk 应该参与 loss 的样本：
-        # 1) 之前没结束的样本（包括当前 newly_finished）
-        # 2) 已经在更早 chunk 结束的样本不再参与
         loss_mask = ~prev_finished_mask
         
-        # 当前 chunk 内哪些样本到达了最终有效位置
         final_step_mask = ended_in_chunk
         
         return effective_logits, loss_mask, final_step_mask
@@ -377,13 +367,11 @@ class CustomLSTMCell(nn.Module):
     def init_sptt_parameters(self):
         self.X_matrix_ih = torch.randn(self.input_dim, self.krank).to(self.device)
         self.Sigma_ih = torch.randn(self.krank).to(self.device)
-        # self.Sigma_ih = torch.tensor([1e-5]*self.krank).to(self.device)
         self.Sigma_matrix_ih = torch.diag(self.Sigma_ih).to(self.device)
         self.Delta_matrix_ih = torch.randn(4 * self.hidden_dim, self.krank).to(self.device)
         
         self.X_matrix_hh = torch.randn(self.hidden_dim, self.krank).to(self.device)
         self.Sigma_hh = torch.randn(self.krank).to(self.device)
-        # self.Sigma_hh = torch.tensor([1e-5]*self.krank).to(self.device)
         self.Sigma_matrix_hh = torch.diag(self.Sigma_hh).to(self.device)
         self.Delta_matrix_hh = torch.randn(4 * self.hidden_dim, self.krank).to(self.device)
     
@@ -471,8 +459,7 @@ class LSTMCellFunction(torch.autograd.Function):
          w_ih, w_hh, b_ih, b_hh, valid_mask) = ctx.saved_tensors
         
         cell = ctx.cell_ref
-        
-        # 初始化梯度
+
         grad_inputs = grad_hx = grad_cx = grad_w_ih = grad_w_hh = grad_b_ih = grad_b_hh = None
         
 
@@ -484,16 +471,13 @@ class LSTMCellFunction(torch.autograd.Function):
         
         delta = torch.cat((grad_ingate, grad_forgetgate, grad_cellgate, grad_outgate), dim=1)
             
-        # 计算输入和隐藏状态的梯度
         grad_inputs = torch.mm(delta, w_ih)
         grad_hx = torch.mm(delta, w_hh)
         grad_cx = grad_cy_total * forgetgate
             
-        # 计算偏置的梯度
         grad_b_ih = delta.sum(0)
         grad_b_hh = delta.sum(0)
         
-        # 只累积有效样本
         if valid_mask.any():
             valid_inputs = inputs[valid_mask]
             valid_hx = hx[valid_mask]
@@ -507,7 +491,6 @@ class LSTMCellFunction(torch.autograd.Function):
             cell.compression_finished = True
             
         if not cell.compression_finished:
-            # 压缩还没完成前，不直接返回 w 的梯度
             grad_w_ih = torch.zeros_like(w_ih)
             grad_w_hh = torch.zeros_like(w_hh)
         elif cell.compression_finished and cell.flag:
@@ -544,10 +527,8 @@ class LSTMCellFunction(torch.autograd.Function):
                 start_sptt_compute = None
                 
             with torch.no_grad():
-                # num_blocks = math.ceil(T / t)
                 num_blocks = T // t
                 for i in range(1, num_blocks + 1):
-                    # print("运行")
                     start_idx = (i - 1) * t
                     end_idx = min(i * t, T)
                     activation_input = input_cat[start_idx:end_idx]
@@ -564,11 +545,9 @@ class LSTMCellFunction(torch.autograd.Function):
                     scale_factor_right_hh = delta_block @ Delta_matrix_hh / block_len
                     scale_factor_left_hh = activation_hx @ X_matrix_hh / block_len
                     
-                    # 使用预计算的系数提高效率
                     i_factor = i / (i + 1)
                     update_factor = 1 / (i + 1)
-        
-                    # 更新X和Delta矩阵
+
                     X_ih_update = activation_input.t() @ scale_factor_right_ih @ inv_Sigma_matrix_ih
                     X_matrix_ih = i_factor * X_matrix_ih + update_factor * X_ih_update
 
@@ -590,27 +569,16 @@ class LSTMCellFunction(torch.autograd.Function):
                     Delta_matrix_hh, _, Sigma_hh_signal_Delta = QR_matrix(Delta_matrix_hh, Delta_matrix_hh.shape)
                     align_hh = Sigma_hh_signal_X * Sigma_hh_signal_Delta
                     Delta_matrix_hh = Delta_matrix_hh * align_hh.unsqueeze(0)
-                    
-                    # 批量计算Sigma更新 ((i + 1) * t)
+
                     Sigma_ih_product = torch.sum(((delta_block @ Delta_matrix_ih) * (activation_input @ X_matrix_ih)) / (block_len), dim=0)
                     Sigma_ih = i_factor * Sigma_ih + update_factor * Sigma_ih_product
                     
                     Sigma_hh_product = torch.sum(((delta_block @ Delta_matrix_hh) * (activation_hx @ X_matrix_hh)) / (block_len), dim=0)
                     Sigma_hh = i_factor * Sigma_hh + update_factor * Sigma_hh_product
                     
-                    # # XXX:
-                    # Sigma_ih = torch.where(Sigma_ih == 0, torch.ones_like(Sigma_ih), Sigma_ih)
-                    # Sigma_hh = torch.where(Sigma_hh == 0, torch.ones_like(Sigma_hh), Sigma_hh)
-                    
-                    # # XXX：
-                    # Sigma_ih = torch.nan_to_num(Sigma_ih, nan=1.0)
-                    # Sigma_hh = torch.nan_to_num(Sigma_hh, nan=1.0)
-                    
-                    # 在计算完成后、更新梯度前应用对数缩放
                     Sigma_matrix_ih = torch.diag(Sigma_ih)
                     Sigma_matrix_hh = torch.diag(Sigma_hh)
                     
-                    # # 更新逆矩阵
                     inv_Sigma_matrix_ih = torch.inverse(Sigma_matrix_ih)
                     inv_Sigma_matrix_hh = torch.inverse(Sigma_matrix_hh)
             
@@ -647,7 +615,6 @@ class LSTMCellFunction(torch.autograd.Function):
             )
         
         else:
-            # 已完成压缩，其他 backward 节点不重复算
             grad_w_ih = torch.zeros_like(w_ih)
             grad_w_hh = torch.zeros_like(w_hh)
         

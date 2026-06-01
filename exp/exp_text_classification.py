@@ -21,8 +21,7 @@ class Exp_text_classification(Exp_basic):
         # the basice class has initialized the self.args
         super().__init__(args)
         self.device = device
-    
-    # /home/leo/breeze/NMI/code/uoro_pytorch/datasets
+         
     def _get_loader(self, data_name, path="./datasets"):
         data_loader = Data_Factory(path=Path(path), num_worker=self.args.num_worker)
         train_loader = data_loader.get_data_loader(
@@ -228,12 +227,6 @@ class Exp_text_classification(Exp_basic):
                         chunk_len = max(1, chunk_len)
                         
                     for chunk_idx, start in enumerate(range(0, sequence_length, chunk_len)):
-                        # cell0 = self.model.model.cells[0]
-                        # print("before chunk:",
-                        #     cell0.X_matrix_ih[0, 0].item(),
-                        #     cell0.Sigma_ih[0].item(),
-                        #     cell0.Delta_matrix_ih[0, 0].item())
-                        
                         end = min(start + chunk_len, sequence_length)
                         chunk_x = batch_x[:, start:end] # [batch_size, chunk_len]
                         chunk_T = chunk_x.size(1)
@@ -284,7 +277,6 @@ class Exp_text_classification(Exp_basic):
                         if batch_final_logits is None:
                             batch_final_logits = torch.zeros_like(output)
 
-                        # 对于在当前 chunk 到达最终有效位置的样本，记录它们的最终 logits
                         if final_step_mask.any():
                             batch_final_logits[final_step_mask] = output[final_step_mask].detach()
 

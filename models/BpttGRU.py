@@ -16,7 +16,7 @@ class Model(nn.Module):
         self.hidden_dim = args.hidden_dim
         self.output_dim = args.output_dim
         
-                # judge the type of input data.
+        # judge the type of input data.
         self.input_type = getattr(args, "input_type", "feature")
         if self.input_type == "text":
             self.vocab_size = args.vocab_size
@@ -127,12 +127,8 @@ class Model(nn.Module):
             self.finished_mask[newly_finished] = True
             effective_logits[newly_finished] = output[newly_finished]
         
-        # 当前 chunk 应该参与 loss 的样本：
-        # 1) 之前没结束的样本（包括当前 newly_finished）
-        # 2) 已经在更早 chunk 结束的样本不再参与
         loss_mask = ~prev_finished_mask
         
-        # 当前 chunk 内哪些样本到达了最终有效位置
         final_step_mask = ended_in_chunk
         
         return effective_logits, loss_mask, final_step_mask

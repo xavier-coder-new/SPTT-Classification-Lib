@@ -126,12 +126,8 @@ class Model(nn.Module):
             self.finished_mask[newly_finished] = True
             effective_logits[newly_finished] = output[newly_finished]
         
-        # 当前 chunk 应该参与 loss 的样本：
-        # 1) 之前没结束的样本（包括当前 newly_finished）
-        # 2) 已经在更早 chunk 结束的样本不再参与
         loss_mask = ~prev_finished_mask
         
-        # 当前 chunk 内哪些样本到达了最终有效位置
         final_step_mask = ended_in_chunk
         
         return effective_logits, loss_mask, final_step_mask
@@ -358,19 +354,7 @@ class LSTMCellFunction(torch.autograd.Function):
         grad_cellgate = grad_cy * ingate * (1 - cellgate ** 2)
         grad_forgetgate = grad_cy * cx * forgetgate * (1 - forgetgate)
         
-        # # calculate gradient for weight
-        # start_calculate_gradients = time.time()
-        # grad_w_ih = torch.mm(torch.cat((grad_ingate, grad_forgetgate, grad_cellgate, grad_outgate), 1).t(), inputs)
-        # grad_w_hh = torch.mm(torch.cat((grad_ingate, grad_forgetgate, grad_cellgate, grad_outgate), 1).t(), hx)
-        # end_calculate_gradients = time.time()
-        # time_backward = end_calculate_gradients - start_calculate_gradients
-        
-        # timers.update_cal_gradient_time(time_backward)
         cell = ctx.cell_ref
-        # delta = torch.cat(
-        #     (grad_ingate, grad_forgetgate, grad_cellgate, grad_outgate),
-        #     dim=1,
-        # )
 
         if cell.profiler is not None and cell.profiler.enabled:
             cell.profiler.sync_if_cuda(inputs.device)

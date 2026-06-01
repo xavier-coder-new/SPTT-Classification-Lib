@@ -9,7 +9,6 @@ class GlobalConfig:
     device: str = 'cuda:0'
     slide_window_nums: int = 4
     
-    # 类级别的单例
     _instance = None
     
     def __new__(cls):
@@ -17,5 +16,4 @@ class GlobalConfig:
             cls._instance = super().__new__(cls)
         return cls._instance
 
-# 创建全局实例
 global_vars = GlobalConfig()

@@ -94,7 +94,7 @@ class TrainingProgress:
             self.console.print("[dim]" + "="*60 + "[/]")
 
     def print_epoch_summary(self, epoch: int, avg_loss: float, avg_acc: float, lr: float):
-        """打印 epoch 汇总信息"""
+        """Print epoch summary"""
         table = self.create_metrics_table(epoch, avg_loss, avg_acc, lr)
         self.console.print(table)
         self.console.print("\n")

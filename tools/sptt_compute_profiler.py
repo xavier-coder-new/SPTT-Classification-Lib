@@ -69,29 +69,6 @@ class SPTTComputeRecord:
 
 
 class SPTTComputeProfiler:
-    """
-    通用 SPTT 计算框架 profiler。
-
-    统计范围：
-    1. SPTT 低秩子空间更新；
-    2. QR re-orthogonalization；
-    3. Sigma 更新；
-    4. grad_w_ih / grad_w_hh 重构。
-
-    不统计：
-    1. RNN forward；
-    2. loss；
-    3. optimizer.step()；
-    4. 普通 gate 反传中的 grad_input / grad_hx / grad_cx；
-    5. accumulator 的简单 append / cat 操作。
-
-    raw record 粒度：
-    - 每个 layer 的一次 SPTT 梯度计算。
-
-    complete-gradient summary 粒度：
-    - 同一个 epoch / batch / chunk 内，所有层的 SPTT 计算聚合为一次完整梯度计算。
-    """
-
     def __init__(
         self, 
         enabled: bool = True, 
@@ -199,11 +176,6 @@ class SPTTComputeProfiler:
 
     @staticmethod
     def inverse_flops(k: int) -> float:
-        """
-        你的代码中对 Sigma_matrix 使用 torch.inverse。
-        虽然 Sigma_matrix 是对角矩阵，但实际调用是 dense inverse，
-        因此这里按 dense k x k inverse 粗略估计。
-        """
         return (2.0 / 3.0) * k ** 3
 
     @classmethod
@@ -217,26 +189,6 @@ class SPTTComputeProfiler:
         total_T: int,
         slide_window_nums: int,
     ) -> Dict[str, float]:
-        """
-        估计单层 cell 的一次 SPTT 梯度计算 FLOPs。
-        
-        关于/block_len是否影响FLOPs,会影响但很小，它不会改变矩阵乘法的主导 FLOPs 阶数，只是增加一个低阶项。
-        
-        现在的 FLOPs 估计里主要统计 matmul、QR、inverse 是合理的。严格来说，/ block_len、i_factor * X_matrix、update_factor * X_update、+ 这些 elementwise 操作也有 FLOPs，但它们相比矩阵乘法和 QR 通常是低阶项。
-
-        LSTM:
-            gate_multiplier = 4
-            Delta_matrix: [4H, k]
-
-        GRU:
-            gate_multiplier = 3
-            Delta_matrix: [3H, k]
-
-        total_T:
-            accumulator 中拼接后的有效样本数。
-            Hybrid / Window 通常对应当前 chunk 内的有效样本总数；
-            Endpoint 通常只对应 endpoint 有效样本数。
-        """
 
         I = int(input_dim)
         H = int(hidden_dim)
@@ -257,7 +209,6 @@ class SPTTComputeProfiler:
 
         total = 0.0
 
-        # 初始 inverse: Sigma_ih, Sigma_hh
         total += cls.inverse_flops(K) * 2
 
         for i in range(1, num_internal_blocks + 1):
@@ -302,7 +253,7 @@ class SPTTComputeProfiler:
             total += cls.qr_flops(H, K)
             total += cls.qr_flops(G, K)
 
-            # sign alignment / element-wise scaling，低阶项
+            # sign alignment / element-wise scaling，low-order terms
             total += 2.0 * G * K
             total += 2.0 * I * K
             total += 2.0 * H * K
@@ -351,8 +302,6 @@ class SPTTComputeProfiler:
 
         elapsed_ms = float(elapsed_ms)
 
-        # 时间：所有 epoch 都记录
-        # FLOPs：只在指定 epoch 估算, None 表示记录所有 epoch
         do_profile_flops = (
             self.profile_flops_epoch is None
             or int(self.epoch) == int(self.profile_flops_epoch)
@@ -384,10 +333,8 @@ class SPTTComputeProfiler:
             self._flush_current_complete_gradient(rank_k=self._current_rank_k)
             self._current_complete_key = complete_key
 
-        # 时间始终累计
         self._current_complete_time_ms += elapsed_ms
 
-        # FLOPs 只在目标 epoch 累计
         if do_profile_flops:
             self._current_complete_flops += local_flops
             self._current_complete_flops_profiled = True
@@ -435,15 +382,6 @@ class SPTTComputeProfiler:
         return path
 
     def complete_gradient_summary(self) -> pd.DataFrame:
-        """
-        聚合为“一次完整 SPTT 梯度计算”。
-
-        对多层网络：
-            同一 epoch / batch / chunk 内所有 layer 的 SPTT 计算求和。
-
-        对 Endpoint：
-            由于非 endpoint 时间步不触发 SPTT，因此自然只统计 endpoint 触发的记录。
-        """
         df = self.to_dataframe()
         if df.empty:
             return df
@@ -495,13 +433,11 @@ class SPTTComputeProfiler:
                 "batch_size": stats["batch_size"],
                 "rank_k": stats["rank_k"],
 
-                # 时间：所有 epoch 都有
                 "single_grad_time_ms_mean": time_stats.mean,
                 "single_grad_time_ms_std": time_stats.sample_std,
                 "epoch_framework_time_ms": stats["epoch_framework_time_ms"],
                 "epoch_framework_time_sec": stats["epoch_framework_time_sec"],
 
-                # FLOPs：只有 profiled epoch 有
                 "is_flops_profiled_epoch": has_profiled_flops,
                 "single_grad_flops_mean": (
                     flops_stats.mean if has_profiled_flops else pd.NA
@@ -523,24 +459,17 @@ class SPTTComputeProfiler:
         if df.empty:
             return df
 
-        # 所有 epoch 的真实框架时间总和
         total_time_ms = df["epoch_framework_time_ms"].sum()
         df["total_framework_time_ms_measured"] = total_time_ms
         df["total_framework_time_sec_measured"] = total_time_ms / 1000.0
 
-        # 只用 profiled epoch 的 FLOPs 估算总 FLOPs
         profiled_rows = df[df["is_flops_profiled_epoch"] == True]
 
         if len(profiled_rows) > 0:
             profiled_epoch_flops = profiled_rows["profiled_epoch_framework_flops"].iloc[0]
             df["profiled_epoch_for_flops"] = int(profiled_rows["epoch"].iloc[0])
-            # df["num_epochs_for_estimate"] = self.num_epochs_for_estimate
-            # df["total_framework_flops_est"] = (
-            #     profiled_epoch_flops * self.num_epochs_for_estimate
-            # )
         else:
             df["profiled_epoch_for_flops"] = pd.NA
-            # df["num_epochs_for_estimate"] = self.num_epochs_for_estimate
             df["total_framework_flops_est"] = pd.NA
 
         return df
@@ -618,14 +547,13 @@ class SPTTComputeProfiler:
                 "epoch_framework_time_ms": 0.0,
                 "epoch_framework_time_sec": 0.0,
                 "profiled_epoch_framework_flops": 0.0,
-                "num_complete_grad_calls": 0, # 所有 epoch 的完整梯度调用次数
-                "num_layer_sptt_calls": 0, # # 所有 epoch 的 layer-level SPTT 调用次数
+                "num_complete_grad_calls": 0, 
+                "num_layer_sptt_calls": 0, 
                 
-                "num_profiled_complete_grad_calls": 0,     # 仅 FLOPs 统计 epoch 的完整梯度调用次数
+                "num_profiled_complete_grad_calls": 0, 
             }
 
         return self.epoch_stats[epoch_key]
-
 
     def _flush_current_complete_gradient(self, rank_k=None):
         if self._current_complete_key is None:
@@ -664,7 +592,6 @@ class SPTTComputeProfiler:
 
         stats = self._ensure_epoch_stats(epoch_key, rank_k if rank_k is not None else -1)
 
-        # 1. 时间：所有 epoch 都统计
         stats["time_stats"].update(self._current_complete_time_ms)
         stats["epoch_framework_time_ms"] += self._current_complete_time_ms
         stats["epoch_framework_time_sec"] += self._current_complete_time_ms / 1000.0
@@ -672,7 +599,6 @@ class SPTTComputeProfiler:
         stats["num_complete_grad_calls"] += 1
         stats["num_layer_sptt_calls"] += self._current_complete_layer_calls
 
-        # 2. FLOPs：只统计指定 profiled epoch
         if self._current_complete_flops_profiled:
             stats["flops_stats"].update(self._current_complete_flops)
             stats["profiled_epoch_framework_flops"] += self._current_complete_flops
@@ -687,13 +613,6 @@ class SPTTComputeProfiler:
 
 
 def plot_sptt_compute_metrics(summary_csv_or_df, save_dir, *, title="SPTT compute profile"):
-    """
-    输入 epoch_summary.csv，输出三张图：
-    1. 单次完整梯度计算时间；
-    2. 单次完整梯度计算 FLOPs；
-    3. epoch 级别 FLOPs。
-    """
-
     if isinstance(summary_csv_or_df, (str, Path)):
         df = pd.read_csv(summary_csv_or_df)
     else:

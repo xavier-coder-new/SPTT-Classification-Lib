@@ -10,7 +10,6 @@ class GradientAccumulator:
         self.hx = []
         self.delta = []
         self.length = 0
-        # print("执行了sptt的reset")
     
     def accumulate(self, inputs, hx, delta):
         """
@@ -25,11 +24,7 @@ class GradientAccumulator:
         self.hx.append(hx)
         self.delta.append(delta)
         self.length += inputs.size(0)
-        # # 当满足这个判断条件时，表示所有时间步都拼接完了。
-        # if self.length >= global_vars.total_time_block_size:
-        #     global_vars.compression_finished = True
-        # global_vars.compression_finished = True
-        
+
     def get_concatenated_gradients(self):
         if self.length == 0:
             return None, None, None

@@ -5,16 +5,14 @@ import numpy as np
 from global_param import global_vars
 from tools.utils import set_seed
 from exp.exp_image_classification import Exp_image_classification
-from exp.exp_audio_classification import Exp_audio_classification
 from exp.exp_text_classification import Exp_text_classification
-from exp.exp_audio_classification_5fold import Exp_audio_classification_5fold
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='SPTT and BPTT for classification')
     
     parser.add_argument('--data_name', type=str, default="AG_NEWS", required=True, 
-                        help="IMDB, sequential_mnist, cifar10, google_speech, esc50, \
-                        AG_NEWS, byte_imdb, nsynth, long_listops")
+                        help="sequential_mnist, cifar10, \
+                        AG_NEWS, long_listops")
     parser.add_argument('--model', type=str, default="BpttLSTM", required=True,
                         help="BpttLSTM, BpttGRU, SpttLSTM, SpttGRU, SpttLSTM_End, SpttGRU_End")
     parser.add_argument('--use_gpu', type=bool, default=True)
@@ -53,16 +51,8 @@ if __name__ == '__main__':
     parser.add_argument("--pad_idx", type=int, default=0, help="padding index for text")
     parser.add_argument("--exp_type", type=str, default="text", help="experiment type, including text, image and audio", required=True)
     parser.add_argument("--offline", action="store_true", help="whether to use offline data loading")
-    parser.add_argument("--n_mels", type=int, default=64, help="number of mel filters")
-    parser.add_argument("--sample_rate", type=int, default=16000, help="audio sample rate")
-    parser.add_argument("--esc50_fold", type=int, default=1, help="ESC50 fold number for testing, default is 1")
-    parser.add_argument("--n_fft", type=int, default=2048, help="feedforward network dimension for transformer model")
-    parser.add_argument("--hop_length", type=int, default=512, help="hop length for STFT")
     parser.add_argument("--to_grayscale", action="store_true", help="whether to convert image to grayscale")
     parser.add_argument("--normalize", action="store_true", help="whether to normalize the data")
-    parser.add_argument("--nsynth_label_type", type=str, default="family", help="label type for NSynth dataset, including family, instrument, source")
-    parser.add_argument("--nsynth_config", type=str, default="default", help="configuration for NSynth dataset")
-    parser.add_argument("--run_five_fold", action="store_true", help="whether to run 5-fold cross validation for ESC50 dataset")
     parser.add_argument("--gradient_clip", action="store_true", help="whether to use gradient clipping")
     parser.add_argument("--profile_sptt_compute", action="store_true", help="whether to profile the compute time of SPTT")
     parser.add_argument("--profile_bptt_compute", action="store_true", help="whether to profile the compute time of BPTT")
@@ -82,7 +72,7 @@ if __name__ == '__main__':
     if args.exp_type == "text":
         args.input_type = "text"
         print(f"Input type: {args.input_type}")
-    elif args.exp_type in {"image", "audio"}:
+    elif args.exp_type in {"image"}:
         args.input_type = "feature"
         print(f"Input type: {args.input_type}")
     else:
@@ -102,12 +92,8 @@ if __name__ == '__main__':
     
     if args.data_name in {'sequential_mnist', 'cifar10'}:
         exp = Exp_image_classification(args, args.device)
-    elif args.data_name in {'google_speech', 'nsynth'}:
-        exp = Exp_audio_classification(args, args.device)
-    elif args.data_name in {'imdb', 'ag_news', 'byte_imdb', 'long_listops'}:
+    elif args.data_name in {'ag_news', 'long_listops'}:
         exp = Exp_text_classification(args, args.device)
-    elif args.data_name in {'esc50'}:
-        exp = Exp_audio_classification_5fold(args, args.device)
     else:
         raise ValueError(f"Unsupported Experiment: {args.data_name}")
 
@@ -117,15 +103,6 @@ if __name__ == '__main__':
         print(f"Truncation enabled, the truncation number is {args.truncate_num}")
 
     print(f">>>>>>>start experiment : {args.model} on {args.data_name} with seed {args.seed}-Epochs-{args.epochs}-Patience-{args.patience}<<<<<")
-
-    if args.data_name in {"esc50"}:
-        result = exp.run()
-        print("ESC50 result:", result)
-    else:
-        best_model_path, test_loader, num_chunks = exp.train()
-
-        print(f">>>>>>>start testing : {args.model} on {args.data_name} with seed {args.seed}-Epochs-{args.epochs}-Patience-{args.patience}<<<<<")
-        exp.test(best_model_path, test_loader, num_chunks)
 
     if args.gpu_type == 'mps':
         torch.backends.mps.empty_cache()

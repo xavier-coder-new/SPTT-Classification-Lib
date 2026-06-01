@@ -9,17 +9,12 @@ from tools.sptt_compute_profiler import SPTTComputeProfiler
 timers = Timers()
 
 def qr_with_non_negative_diagonal(matrix):
-    # 进行QR分解
     Q, R = torch.linalg.qr(matrix)
     
-    # 获取 R 矩阵对角线元素的符号
     diagonal_sign = torch.sign(torch.diag(R))
     
-    # 避免对角线元素为零的情况
     diagonal_sign[diagonal_sign == 0] = 1
-    # ic(diagonal_sign)
     
-    # 调整 Q 矩阵的列符号和Q = Q * diagonal_sign得到的结果一样。
     Q1 = Q * diagonal_sign.unsqueeze(0)
     
     R = diagonal_sign.unsqueeze(1) * R
@@ -30,7 +25,6 @@ def QR_matrix(X_matrix, target_shape):
     Q, R, diagonal_sign = qr_with_non_negative_diagonal(X_matrix)
     
     if Q.shape != target_shape:
-        # 进入这个会出现nan数值错误
         raise ValueError(f"QR shape mismatch: got {Q.shape}, expected {target_shape}")
 
     return Q, R, diagonal_sign
@@ -155,13 +149,9 @@ class Model(nn.Module):
             self.final_logits[newly_finished] = output[newly_finished].detach()
             self.finished_mask[newly_finished] = True
             effective_logits[newly_finished] = output[newly_finished]
-        
-        # 当前 chunk 应该参与 loss 的样本：
-        # 1) 之前没结束的样本（包括当前 newly_finished）
-        # 2) 已经在更早 chunk 结束的样本不再参与
+
         loss_mask = ~prev_finished_mask
         
-        # 当前 chunk 内哪些样本到达了最终有效位置
         final_step_mask = ended_in_chunk
         
         return effective_logits, loss_mask, final_step_mask
@@ -363,13 +353,11 @@ class CustomGRUCell(nn.Module):
     def init_sptt_parameters(self):
         self.X_matrix_ih = torch.randn(self.input_dim, self.krank).to(self.device)
         self.Sigma_ih = torch.randn(self.krank).to(self.device)
-        # self.Sigma_ih = torch.tensor([1e-5]*self.krank).to(self.device)
         self.Sigma_matrix_ih = torch.diag(self.Sigma_ih).to(self.device)
         self.Delta_matrix_ih = torch.randn(3 * self.hidden_dim, self.krank).to(self.device)
         
         self.X_matrix_hh = torch.randn(self.hidden_dim, self.krank).to(self.device)
         self.Sigma_hh = torch.randn(self.krank).to(self.device)
-        # self.Sigma_hh = torch.tensor([1e-5]*self.krank).to(self.device)
         self.Sigma_matrix_hh = torch.diag(self.Sigma_hh).to(self.device)
         self.Delta_matrix_hh = torch.randn(3 * self.hidden_dim, self.krank).to(self.device)
     
@@ -474,27 +462,21 @@ class GRUCellFunction(torch.autograd.Function):
         
         cell = ctx.cell_ref
         
-        # 初始化梯度
         d_input = d_hidden_state = grad_w_ih = grad_w_hh = grad_b_ih = grad_b_hh = None
         
-        # 计算更新门的梯度
         d_update_gate = (hidden_state - n) * grad_hy
         d_update_gate = d_update_gate * update_gate * (1 - update_gate)
 
-        # 计算候选隐藏状态的梯度
         d_n = (1 - update_gate) * grad_hy
         d_n_tanh = d_n * (1 - n ** 2)
 
-        # 计算重置门的梯度
         hidden_w_hn = torch.mm(hidden_state, w_hn.t()) + b_hn
         d_reset_gate = d_n_tanh * hidden_w_hn
         d_reset_gate = d_reset_gate * reset_gate * (1 - reset_gate)
     
-        # ---- build two deltas for GRU ----
         delta_ih = torch.cat((d_reset_gate, d_update_gate, d_n_tanh), dim=1)
         delta_hh = torch.cat((d_reset_gate, d_update_gate, d_n_tanh * reset_gate), dim=1)
-
-        # gradients to input / hidden
+        
         d_input = (
             torch.mm(d_reset_gate, w_ir) +
             torch.mm(d_update_gate, w_iz) +
@@ -508,7 +490,6 @@ class GRUCellFunction(torch.autograd.Function):
             reset_gate * torch.mm(d_n_tanh, w_hn)
         )
 
-        # bias gradients
         grad_b_ir = d_reset_gate.sum(0)
         grad_b_iz = d_update_gate.sum(0)
         grad_b_in = d_n_tanh.sum(0)
@@ -519,7 +500,6 @@ class GRUCellFunction(torch.autograd.Function):
         grad_b_hn = (d_n_tanh * reset_gate).sum(0)
         grad_b_hh = torch.cat((grad_b_hr, grad_b_hz, grad_b_hn))
 
-        # accumulate only valid rows
         if valid_mask.any():
             valid_inputs = inputs[valid_mask]
             valid_hx = hidden_state[valid_mask]
@@ -567,7 +547,6 @@ class GRUCellFunction(torch.autograd.Function):
                 start_sptt_compute = None
 
             with torch.no_grad():
-                # num_blocks = math.ceil(T / t)
                 num_blocks = T // t
                 for i in range(1, num_blocks + 1):
                     start_idx = (i - 1) * t
@@ -624,14 +603,6 @@ class GRUCellFunction(torch.autograd.Function):
                         dim=0,
                     )
                     Sigma_hh = history_factor * Sigma_hh + update_factor * Sigma_hh_product
-                    
-                    # XXX:
-                    Sigma_ih = torch.where(Sigma_ih == 0, torch.ones_like(Sigma_ih), Sigma_ih)
-                    Sigma_hh = torch.where(Sigma_hh == 0, torch.ones_like(Sigma_hh), Sigma_hh)
-                    
-                    # XXX：
-                    Sigma_ih = torch.nan_to_num(Sigma_ih, nan=1.0)
-                    Sigma_hh = torch.nan_to_num(Sigma_hh, nan=1.0)
 
                     Sigma_matrix_ih = torch.diag(Sigma_ih)
                     Sigma_matrix_hh = torch.diag(Sigma_hh)
