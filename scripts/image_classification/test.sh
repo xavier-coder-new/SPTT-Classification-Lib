@@ -11,7 +11,8 @@ patience=$5
 truncate_num=$6
 batch_size=$7
 learning_rate=$8
-hidden_dim=512
+# hidden_dim=512
+hidden_dim=256
 embed_dim=256
 num_layers=$9
 krank="${10}"
@@ -54,7 +55,7 @@ if [ "$need_vali" = "True" ]; then
         --slide_window_nums $slide_window_nums \
         --exp_type=$exp_type \
         --need_vali \
-        --to_grayscale
+        --to_grayscale 
 else
     python -m run \
         --model $model \

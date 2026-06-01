@@ -43,7 +43,7 @@ if __name__ == '__main__':
     parser.add_argument("--output_dim", type=int, help="output dimension", required=True)
     parser.add_argument("--num_layers", type=int, default=1, help="number of layers for RNN model",)
     parser.add_argument("--use_multi_gpu", action="store_true", help="whether to use multiple GPUs")
-    parser.add_argument("--num_worker", type=int, default=4, help="number of workers for data loading")
+    parser.add_argument("--num_worker", type=int, default=2, help="number of workers for data loading")
     parser.add_argument("--slide_window_nums", type=int, default=4, help="number of sliding windows for SPTT")
     parser.add_argument("--min_freq", type=int, default=1, help="minimum frequency for vocabulary")
     parser.add_argument("--fixed_length", type=int, default=None, help="fixed length for text")
@@ -64,10 +64,16 @@ if __name__ == '__main__':
     parser.add_argument("--nsynth_config", type=str, default="default", help="configuration for NSynth dataset")
     parser.add_argument("--run_five_fold", action="store_true", help="whether to run 5-fold cross validation for ESC50 dataset")
     parser.add_argument("--gradient_clip", action="store_true", help="whether to use gradient clipping")
+    parser.add_argument("--profile_sptt_compute", action="store_true", help="whether to profile the compute time of SPTT")
+    parser.add_argument("--profile_bptt_compute", action="store_true", help="whether to profile the compute time of BPTT")
+    
     
     args = parser.parse_args()
 
     global_vars.krank = args.krank
+
+    print("******SPTT Compute Profiling:*******", args.profile_sptt_compute)
+    print("******BPTT Compute Profiling:*******", args.profile_bptt_compute)
     
     torch.set_num_threads(args.threads)
     set_seed(args.seed)

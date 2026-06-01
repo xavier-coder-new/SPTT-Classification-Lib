@@ -3,7 +3,7 @@
 export CUDA_VISIBLE_DEVICES=0
 
 model=SpttLSTM
-# cifar10
+# cifar10 sequential_mnist
 data_name=cifar10
 seed=2025
 epochs=500

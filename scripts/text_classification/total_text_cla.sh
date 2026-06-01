@@ -2,13 +2,13 @@
 
 export CUDA_VISIBLE_DEVICES=0
 
-models=("BpttLSTM")
+models=("BpttLSTM" "SpttLSTM")
 data_names=("long_listops")
-seeds=(2023)
+seeds=(2027 2028)
 epochs=500
 patience=50
 # 1 represents no truncation, and the model will process the whole sequence at once.
-truncate_num=1
+truncate_num=40
 # batch_size=128
 batch_size=128
 learning_rate=0.001
@@ -20,16 +20,19 @@ slide_window_nums=1
 max_length=2000
 fixed_length=2000
 
-args=(
-    "$model" "$data_name" "$seed" "$epochs"
-    "$patience" "$truncate_num" "$batch_size"
-    "$learning_rate" "$num_layers" "$krank"
-    "$slide_window_nums" "$max_length" "$fixed_length"
-)
-
 for seed in "${seeds[@]}"; do
   for data_name in "${data_names[@]}"; do
     for model in "${models[@]}"; do
+      if [[ "$model" = "SpttLSTM" ]]; then
+          learning_rate=0.003
+          epochs=500
+          patience=35
+      elif [[ "$model" = "BpttLSTM" ]]; then
+          learning_rate=0.001
+          epochs=500
+          patience=35
+      fi
+
         job_name="text_classification---${model}---${data_name}---${seed}"
         echo "--------------------------------------------------------------"
         echo "Running job: ${job_name}"
@@ -39,16 +42,6 @@ for seed in "${seeds[@]}"; do
         echo "Krank: ${krank}"
         echo "Slide window nums: ${slide_window_nums}"
         echo "--------------------------------------------------------------"
-
-        if [[ "$model" = "SpttLSTM" ]]; then
-            learning_rate=0.005
-            epochs=500
-            patience=50
-        elif [[ "$model" = "BpttLSTM" ]]; then
-            learning_rate=0.001
-            epochs=500
-            patience=50
-        fi
 
         args=(
             "$model" "$data_name" "$seed" "$epochs"

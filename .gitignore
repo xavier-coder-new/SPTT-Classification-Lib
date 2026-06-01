@@ -8,3 +8,6 @@ __pycache__/
 /datasets/
 /checkpoints/
 /results
+/paper_data/
+/compute_metrics
+figures

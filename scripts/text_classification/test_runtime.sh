@@ -2,28 +2,27 @@
 
 export CUDA_VISIBLE_DEVICES=0
 
-model=BpttLSTM
-data_name=ag_news
-seed=2024
-epochs=100
-patience=10
-truncate_num=1
-batch_size=256
-learning_rate=0.001
+model=$1
+data_name=$2
+seed=$3
+epochs=$4
+patience=$5
+truncate_num=$6
+batch_size=$7
+learning_rate=$8
 hidden_dim=512
 embed_dim=256
-num_layers=1
-krank=6
+num_layers=$9
+krank=${10}
+# pixel, row
 vali_ratio=0.1
 exp_type=text
-slide_window_nums=1
+slide_window_nums=${11}
 # pad, repeat
 # length_mode=pad
-# max_length=4000
-# fixed_length=4000
 length_mode=repeat
 # max_length=1200
-# fixed_length=900
+# fixed_length=800
 
 if [[ "$data_name" = "imdb" ]]; then
     batch_size=256
@@ -37,24 +36,22 @@ elif [[ "$data_name" = "byte_imdb" ]]; then
     feature_dim=$embed_dim
     output_dim=2
     need_vali=True
-    max_length=4000
-    fixed_length=4000
+    max_length=${12}
+    fixed_length=${13}
 elif [[ "$data_name" = "ag_news" ]]; then
     batch_size=256
     feature_dim=$embed_dim
     output_dim=4
     need_vali=True
-    # max_length=None
-    # fixed_length=None
-    max_length=1200
-    fixed_length=1200
+    max_length=${12}
+    fixed_length=${13}
 elif [[ "$data_name" = "long_listops" ]]; then
     batch_size=256
     feature_dim=$embed_dim
     output_dim=10
     need_vali=True
-    max_length=2000
-    fixed_length=2000
+    max_length=${12}
+    fixed_length=${13}
 fi
 
 # Run training with or without validation set
@@ -85,7 +82,7 @@ if [ "$need_vali" = "True" ]; then
         --offline \
         --max_length $max_length \
         --fixed_length $fixed_length \
-        # --profile_bptt_compute
+        # --profile_sptt_compute
 else
     python -m run \
         --model $model \
@@ -105,12 +102,12 @@ else
         --output_dim $output_dim \
         --num_layers $num_layers \
         --use_rich \
+        --permute \
         --slide_window_nums $slide_window_nums \
         --exp_type $exp_type \
         --length_mode $length_mode \
-        --permute \
         --offline \
         --max_length $max_length \
         --fixed_length $fixed_length \
-        # --profile_bptt_compute 
+        # --profile_sptt_compute
 fi

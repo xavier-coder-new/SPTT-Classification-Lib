@@ -2,11 +2,11 @@
 
 export CUDA_VISIBLE_DEVICES=0
 
-model=SpttGRU
-data_name=long_listops
-seed=2025
-epochs=2
-patience=1
+model=SpttLSTM_End
+data_name=ag_news
+seed=2023
+epochs=100
+patience=10
 truncate_num=1
 batch_size=256
 learning_rate=0.001
@@ -19,9 +19,10 @@ vali_ratio=0.1
 exp_type=text
 slide_window_nums=1
 # pad, repeat
-length_mode=pad
-max_length=4000
-fixed_length=4000
+# length_mode=pad
+length_mode=repeat
+# max_length=1200
+# fixed_length=800
 
 if [[ "$data_name" = "imdb" ]]; then
     batch_size=256
@@ -42,8 +43,8 @@ elif [[ "$data_name" = "ag_news" ]]; then
     feature_dim=$embed_dim
     output_dim=4
     need_vali=True
-    max_length=None
-    fixed_length=None
+    max_length=1200
+    fixed_length=900
 elif [[ "$data_name" = "long_listops" ]]; then
     batch_size=256
     feature_dim=$embed_dim
@@ -80,7 +81,8 @@ if [ "$need_vali" = "True" ]; then
         --need_vali \
         --offline \
         --max_length $max_length \
-        --fixed_length $fixed_length
+        --fixed_length $fixed_length \
+        # --profile_sptt_compute
 else
     python -m run \
         --model $model \
@@ -106,5 +108,6 @@ else
         --length_mode $length_mode \
         --offline \
         --max_length $max_length \
-        --fixed_length $fixed_length
+        --fixed_length $fixed_length \
+        # --profile_sptt_compute
 fi
