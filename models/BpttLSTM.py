@@ -4,6 +4,7 @@ import math
 from tools.Timers import Timers
 import time
 from typing import Tuple
+from tools.bptt_compute_profiler import BPTTComputeProfiler
 
 timers = Timers()
 
@@ -145,7 +146,12 @@ class CustomLSTM(nn.Module):
         self.num_layers = args.num_layers
         self.device = args.device
         print(f"CustomLSTM: input_dim={input_dim}, hidden_dim={args.hidden_dim}, num_layers={args.num_layers}")
-        self.cells =nn.ModuleList()
+        self.cells = nn.ModuleList()
+        self.bptt_profiler = BPTTComputeProfiler(
+            enabled=getattr(args, "profile_bptt_compute", False),
+            keep_raw=False,
+            profile_epoch=1,
+        )
         
         for layer_idx in range(self.num_layers):
             cur_input_dim = self.input_dim if layer_idx == 0 else self.hidden_dim
@@ -153,7 +159,9 @@ class CustomLSTM(nn.Module):
                 CustomLSTMCell(
                     input_dim=cur_input_dim,
                     hidden_dim=self.hidden_dim,
-                    device=self.device
+                    device=self.device,
+                    layer_idx=layer_idx,
+                    profiler=self.bptt_profiler,
                 )
             )
         
@@ -199,6 +207,29 @@ class CustomLSTM(nn.Module):
         mask = mask.unsqueeze(1).to(device=new_state.device, dtype=new_state.dtype)  # [B, 1]
         return new_state * mask + old_state * (1.0 - mask)
             
+    def set_profile_context(
+        self,
+        *,
+        epoch,
+        batch_idx,
+        chunk_idx,
+        model_name,
+        data_name,
+        sequence_length,
+        chunk_length,
+        batch_size,
+    ):
+        if hasattr(self, "bptt_profiler") and self.bptt_profiler is not None:
+            self.bptt_profiler.set_context(
+                epoch=epoch,
+                batch_idx=batch_idx,
+                chunk_idx=chunk_idx,
+                model_name=model_name,
+                data_name=data_name,
+                sequence_length=sequence_length,
+                chunk_length=chunk_length,
+                batch_size=batch_size,
+            )
 
     def forward(self, inputs, chunck_actual_length, chunk_sequence_length):
         """
@@ -254,7 +285,14 @@ class CustomLSTM(nn.Module):
             
             
 class CustomLSTMCell(nn.Module):
-    def __init__(self, input_dim, hidden_dim, device):
+    def __init__(
+        self,
+        input_dim,
+        hidden_dim,
+        device,
+        layer_idx=0,
+        profiler=None,
+    ):
         super().__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
@@ -265,6 +303,10 @@ class CustomLSTMCell(nn.Module):
         self.b_ih = nn.Parameter(torch.Tensor(4 * hidden_dim))
         self.b_hh = nn.Parameter(torch.Tensor(4 * hidden_dim))
         
+        self.layer_idx = layer_idx
+        self.profiler = profiler
+        self.gate_multiplier = 4
+        
         self.reset_parameters()
     
     def reset_parameters(self):
@@ -273,12 +315,21 @@ class CustomLSTMCell(nn.Module):
             nn.init.uniform_(weight, -stdv, stdv)
     
     def forward(self, inputs, hx, cx):
-        return LSTMCellFunction.apply(inputs, hx, cx, self.w_ih, self.w_hh, self.b_ih, self.b_hh)
+        return LSTMCellFunction.apply(
+            inputs,
+            hx,
+            cx,
+            self.w_ih,
+            self.w_hh,
+            self.b_ih,
+            self.b_hh,
+            self,
+        )
 
 
 class LSTMCellFunction(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, inputs, hx, cx, w_ih, w_hh, b_ih, b_hh):
+    def forward(ctx, inputs, hx, cx, w_ih, w_hh, b_ih, b_hh, cell_ref):
         gates = (torch.mm(inputs, w_ih.t()) + b_ih + torch.mm(hx, w_hh.t()) + b_hh)
         ingate, forgetgate, cellgate, outgate = gates.chunk(4, 1)
 
@@ -291,6 +342,7 @@ class LSTMCellFunction(torch.autograd.Function):
         hy = outgate * torch.tanh(cy)
 
         ctx.save_for_backward(inputs, hx, cx, hy, cy, ingate, forgetgate, cellgate, outgate, w_ih, w_hh, b_ih, b_hh)
+        ctx.cell_ref = cell_ref
         
         return hy, cy
     
@@ -306,15 +358,42 @@ class LSTMCellFunction(torch.autograd.Function):
         grad_cellgate = grad_cy * ingate * (1 - cellgate ** 2)
         grad_forgetgate = grad_cy * cx * forgetgate * (1 - forgetgate)
         
-        # calculate gradient for weight
-        start_calculate_gradients = time.time()
+        # # calculate gradient for weight
+        # start_calculate_gradients = time.time()
+        # grad_w_ih = torch.mm(torch.cat((grad_ingate, grad_forgetgate, grad_cellgate, grad_outgate), 1).t(), inputs)
+        # grad_w_hh = torch.mm(torch.cat((grad_ingate, grad_forgetgate, grad_cellgate, grad_outgate), 1).t(), hx)
+        # end_calculate_gradients = time.time()
+        # time_backward = end_calculate_gradients - start_calculate_gradients
+        
+        # timers.update_cal_gradient_time(time_backward)
+        cell = ctx.cell_ref
+        # delta = torch.cat(
+        #     (grad_ingate, grad_forgetgate, grad_cellgate, grad_outgate),
+        #     dim=1,
+        # )
+
+        if cell.profiler is not None and cell.profiler.enabled:
+            cell.profiler.sync_if_cuda(inputs.device)
+            start_calculate_gradients = time.perf_counter()
+        else:
+            start_calculate_gradients = None
+
         grad_w_ih = torch.mm(torch.cat((grad_ingate, grad_forgetgate, grad_cellgate, grad_outgate), 1).t(), inputs)
         grad_w_hh = torch.mm(torch.cat((grad_ingate, grad_forgetgate, grad_cellgate, grad_outgate), 1).t(), hx)
-        end_calculate_gradients = time.time()
-        time_backward = end_calculate_gradients - start_calculate_gradients
-        
-        timers.update_cal_gradient_time(time_backward)
-        
+
+        if cell.profiler is not None and cell.profiler.enabled:
+            cell.profiler.sync_if_cuda(inputs.device)
+            elapsed_ms = (time.perf_counter() - start_calculate_gradients) * 1000.0
+
+            cell.profiler.add_local_record(
+                layer_idx=cell.layer_idx,
+                input_dim=cell.input_dim,
+                hidden_dim=cell.hidden_dim,
+                gate_multiplier=cell.gate_multiplier,
+                batch_size=inputs.size(0),
+                elapsed_ms=elapsed_ms,
+            )
+            
         # calculate gradient for bias
         grad_b_ih = torch.cat((grad_ingate, grad_forgetgate, grad_cellgate, grad_outgate), 1).sum(0)
         grad_b_hh = torch.cat((grad_ingate, grad_forgetgate, grad_cellgate, grad_outgate), 1).sum(0)
@@ -324,4 +403,4 @@ class LSTMCellFunction(torch.autograd.Function):
         grad_hx = torch.mm(torch.cat((grad_ingate, grad_forgetgate, grad_cellgate, grad_outgate), 1), w_hh)
         grad_cx = grad_cy * forgetgate
 
-        return grad_inputs, grad_hx, grad_cx, grad_w_ih, grad_w_hh, grad_b_ih, grad_b_hh
+        return grad_inputs, grad_hx, grad_cx, grad_w_ih, grad_w_hh, grad_b_ih, grad_b_hh, None

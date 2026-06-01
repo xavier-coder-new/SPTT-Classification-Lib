@@ -221,7 +221,7 @@ class Exp_image_classification(Exp_basic):
                         chunk_len = math.ceil(sequence_length / self.args.truncate_num)
                         chunk_len = max(1, chunk_len)
                         
-                    for start in range(0, sequence_length, chunk_len):
+                    for chunk_idx, start in enumerate(range(0, sequence_length, chunk_len)):
                         # cell0 = self.model.model.cells[0]
                         # print("before chunk:",
                         #     cell0.X_matrix_ih[0, 0].item(),
@@ -255,6 +255,18 @@ class Exp_image_classification(Exp_basic):
                             self.chunk_len = chunk_len
                             
                         optimizer.zero_grad()
+                        
+                        if hasattr(self.model.model, "set_profile_context"):
+                            self.model.model.set_profile_context(
+                                epoch=epoch_count,
+                                batch_idx=batch_count,
+                                chunk_idx=chunk_idx,
+                                model_name=self.args.model,
+                                data_name=self.args.data_name,
+                                sequence_length=sequence_length,
+                                chunk_length=chunk_T,
+                                batch_size=batch_size,
+                            )
                         
                         output, loss_mask, final_step_mask = self.model(
                             inputs=inputs,
@@ -343,6 +355,23 @@ class Exp_image_classification(Exp_basic):
                 )
                 
                 vali_av_loss, vali_acc = self.validate(vali_loader, vali_loss_path)
+                
+                if hasattr(self.model.model, "sptt_profiler") and self.model.model.sptt_profiler is not None:
+                    profiler = self.model.model.sptt_profiler
+
+                    metric_dir = (
+                        Path("compute_metrics")
+                        / self.args.exp_type
+                        / self.args.model
+                        / self.args.data_name
+                        / f"seed_{self.args.seed}"
+                        / f"krank_{self.args.krank}_Trun_{self.args.truncate_num}_Slide_{self.args.slide_window_nums}"
+                    )
+                    metric_dir.mkdir(parents=True, exist_ok=True)
+
+                    profiler.save_csv(metric_dir / "sptt_compute_raw.csv")
+                    profiler.save_complete_gradient_summary(metric_dir / "sptt_complete_gradient_summary.csv")
+                    profiler.save_epoch_summary(metric_dir / "sptt_compute_epoch_summary.csv")
             
                 self.file_logger.info(f"-----Epoch {epoch_count}, Average Loss: {avg_loss:.4f}, Train Accuracy: {epoch_acc:.4f}, Validation Accuracy: {vali_acc:.4f} -------")
             

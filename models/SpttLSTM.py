@@ -5,22 +5,9 @@ from tools.Timers import Timers
 import time
 from tools.GradientAccumulator_Hybrid import GradientAccumulator
 from icecream import ic
+from tools.sptt_compute_profiler import SPTTComputeProfiler
 
 timers = Timers()
-
-
-def chodral_subspace_drift(Q_matrix_old: torch.Tensor, Q_matrix_new: torch.Tensor) -> torch.Tensor:
-    """
-    [unit_dim, krank]
-    Q_matrix_old, Q_matrix_new: [d, k] with orthonormal columns.
-    Returns scalar drift (chordal distance): sqrt(k - ||Q_old^T Q_new||_F^2)
-    M: Q_old.T @ Q_new
-    """
-    k = Q_matrix_old.shape[1]
-    M = Q_matrix_old.transpose(0, 1) @ Q_matrix_new
-    frob_sq = torch.sum(M ** 2)
-    drift_sq = torch.clamp(k - frob_sq, min=0.0)
-    return torch.sqrt(drift_sq)
 
 def qr_with_non_negative_diagonal(matrix):
     # 进行QR分解
@@ -194,6 +181,11 @@ class CustomLSTM(nn.Module):
         self.slide_window_nums  = args.slide_window_nums
         print(f"CustomLSTM: input_dim={input_dim}, hidden_dim={args.hidden_dim}, num_layers={args.num_layers}")
         self.cells =nn.ModuleList()
+        self.sptt_profiler = SPTTComputeProfiler(
+            enabled=getattr(args, "profile_sptt_compute", False),
+            keep_raw=False,
+            profile_epoch=1,
+        )
         
         for layer_idx in range(self.num_layers):
             cur_input_dim = self.input_dim if layer_idx == 0 else self.hidden_dim
@@ -203,7 +195,9 @@ class CustomLSTM(nn.Module):
                     hidden_dim=self.hidden_dim,
                     krank=self.krank,
                     slide_window_nums=self.slide_window_nums,
-                    device=self.device
+                    device=self.device,
+                    layer_idx=layer_idx,
+                    profiler=self.sptt_profiler,
                 )
             )
         
@@ -258,6 +252,32 @@ class CustomLSTM(nn.Module):
             
         mask = mask.unsqueeze(1).to(device=new_state.device, dtype=new_state.dtype)  # [B, 1]
         return new_state * mask + old_state * (1.0 - mask)
+    
+    def set_profile_context(
+        self,
+        *,
+        epoch,
+        batch_idx,
+        chunk_idx,
+        model_name,
+        data_name,
+        sequence_length,
+        chunk_length,
+        batch_size,
+    ):
+        if hasattr(self, "sptt_profiler") and self.sptt_profiler is not None:
+            self.sptt_profiler.set_context(
+                epoch=epoch,
+                batch_idx=batch_idx,
+                chunk_idx=chunk_idx,
+                model_name=model_name,
+                data_name=data_name,
+                sequence_length=sequence_length,
+                chunk_length=chunk_length,
+                batch_size=batch_size,
+                mode_name="Endpoint" if "End" in model_name or "Endpoint" in model_name else "Hybrid",
+                architecture="LSTM",
+            )
             
     def forward(self, inputs, chunck_actual_length, chunk_sequence_length):
         """
@@ -315,7 +335,16 @@ class CustomLSTM(nn.Module):
             
             
 class CustomLSTMCell(nn.Module):
-    def __init__(self, input_dim, hidden_dim, krank, slide_window_nums, device):
+    def __init__(
+        self,
+        input_dim,
+        hidden_dim,
+        krank,
+        slide_window_nums,
+        device,
+        layer_idx=0,
+        profiler=None,
+    ):
         super().__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
@@ -327,6 +356,10 @@ class CustomLSTMCell(nn.Module):
         self.w_hh = nn.Parameter(torch.Tensor(4 * hidden_dim, hidden_dim))
         self.b_ih = nn.Parameter(torch.Tensor(4 * hidden_dim))
         self.b_hh = nn.Parameter(torch.Tensor(4 * hidden_dim))
+        
+        self.layer_idx = layer_idx
+        self.profiler = profiler
+        self.gate_multiplier = 4
         
         self.sptt_update_count = 0
         
@@ -466,7 +499,10 @@ class LSTMCellFunction(torch.autograd.Function):
             valid_hx = hx[valid_mask]
             valid_delta = delta[valid_mask]
             cell.accumulator.accumulate(valid_inputs, valid_hx, valid_delta)
-            
+        
+        # print(f"Accumulator length: {cell.accumulator.length}")
+        # print(f"total_time_block_size: {cell.total_time_block_size}")
+        
         if cell.accumulator.length >= cell.total_time_block_size and not cell.compression_finished:
             cell.compression_finished = True
             
@@ -499,7 +535,14 @@ class LSTMCellFunction(torch.autograd.Function):
             inv_Sigma_matrix_ih = torch.inverse(Sigma_matrix_ih)
             inv_Sigma_matrix_hh = torch.inverse(Sigma_matrix_hh)
             
-            start_time = time.time()
+            device = input_cat.device
+
+            if cell.profiler is not None and cell.profiler.enabled:
+                cell.profiler.sync_if_cuda(device)
+                start_sptt_compute = time.perf_counter()
+            else:
+                start_sptt_compute = None
+                
             with torch.no_grad():
                 # num_blocks = math.ceil(T / t)
                 num_blocks = T // t
@@ -555,13 +598,13 @@ class LSTMCellFunction(torch.autograd.Function):
                     Sigma_hh_product = torch.sum(((delta_block @ Delta_matrix_hh) * (activation_hx @ X_matrix_hh)) / (block_len), dim=0)
                     Sigma_hh = i_factor * Sigma_hh + update_factor * Sigma_hh_product
                     
-                    # XXX:
-                    Sigma_ih = torch.where(Sigma_ih == 0, torch.ones_like(Sigma_ih), Sigma_ih)
-                    Sigma_hh = torch.where(Sigma_hh == 0, torch.ones_like(Sigma_hh), Sigma_hh)
+                    # # XXX:
+                    # Sigma_ih = torch.where(Sigma_ih == 0, torch.ones_like(Sigma_ih), Sigma_ih)
+                    # Sigma_hh = torch.where(Sigma_hh == 0, torch.ones_like(Sigma_hh), Sigma_hh)
                     
-                    # XXX：
-                    Sigma_ih = torch.nan_to_num(Sigma_ih, nan=1.0)
-                    Sigma_hh = torch.nan_to_num(Sigma_hh, nan=1.0)
+                    # # XXX：
+                    # Sigma_ih = torch.nan_to_num(Sigma_ih, nan=1.0)
+                    # Sigma_hh = torch.nan_to_num(Sigma_hh, nan=1.0)
                     
                     # 在计算完成后、更新梯度前应用对数缩放
                     Sigma_matrix_ih = torch.diag(Sigma_ih)
@@ -574,8 +617,22 @@ class LSTMCellFunction(torch.autograd.Function):
             grad_w_ih = (X_matrix_ih @ Sigma_matrix_ih @ Delta_matrix_ih.t()).t()
             grad_w_hh = (X_matrix_hh @ Sigma_matrix_hh @ Delta_matrix_hh.t()).t()
             
-            _ = time.time() - start_time
-            
+
+            if cell.profiler is not None and cell.profiler.enabled:
+                cell.profiler.sync_if_cuda(device)
+                elapsed_ms = (time.perf_counter() - start_sptt_compute) * 1000.0
+
+                cell.profiler.add_local_record(
+                    layer_idx=cell.layer_idx,
+                    input_dim=cell.input_dim,
+                    hidden_dim=cell.hidden_dim,
+                    gate_multiplier=cell.gate_multiplier,
+                    rank_k=cell.krank,
+                    block_len_total=T,
+                    slide_window_nums=cell.slide_window_nums,
+                    elapsed_ms=elapsed_ms,
+                )
+                
             cell.set_sptt_state(
                 flag=cell.flag,
                 compression_finished=cell.compression_finished,

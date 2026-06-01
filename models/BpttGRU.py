@@ -4,6 +4,7 @@ import math
 from tools.Timers import Timers
 import time
 from typing import Tuple
+from tools.bptt_compute_profiler import BPTTComputeProfiler
 
 timers = Timers()
 
@@ -146,7 +147,11 @@ class CustomGRU(nn.Module):
         self.num_layers = args.num_layers
         self.device = args.device
         print(f"CustomGRU: input_dim={input_dim}, hidden_dim={args.hidden_dim}, num_layers={args.num_layers}")
-        self.cells =nn.ModuleList()
+        self.cells = nn.ModuleList()
+        self.bptt_profiler = BPTTComputeProfiler(
+            enabled=getattr(args, "profile_bptt_compute", False),
+            keep_raw=False,
+        )
         
         for layer_idx in range(self.num_layers):
             cur_input_dim = self.input_dim if layer_idx == 0 else self.hidden_dim
@@ -154,7 +159,9 @@ class CustomGRU(nn.Module):
                 CustomGRUCell(
                     input_dim=cur_input_dim,
                     hidden_dim=self.hidden_dim,
-                    device=self.device
+                    device=self.device,
+                    layer_idx=layer_idx,
+                    profiler=self.bptt_profiler,
                 )
             )
         
@@ -194,7 +201,30 @@ class CustomGRU(nn.Module):
             
         mask = mask.unsqueeze(1).to(device=new_state.device, dtype=new_state.dtype)  # [B, 1]
         return new_state * mask + old_state * (1.0 - mask)
-            
+    
+    def set_profile_context(
+        self,
+        *,
+        epoch,
+        batch_idx,
+        chunk_idx,
+        model_name,
+        data_name,
+        sequence_length,
+        chunk_length,
+        batch_size,
+    ):
+        if hasattr(self, "bptt_profiler") and self.bptt_profiler is not None:
+            self.bptt_profiler.set_context(
+                epoch=epoch,
+                batch_idx=batch_idx,
+                chunk_idx=chunk_idx,
+                model_name=model_name,
+                data_name=data_name,
+                sequence_length=sequence_length,
+                chunk_length=chunk_length,
+                batch_size=batch_size,
+            )
 
     def forward(self, inputs, chunck_actual_length, chunk_sequence_length):
         """
@@ -245,7 +275,14 @@ class CustomGRU(nn.Module):
             
             
 class CustomGRUCell(nn.Module):
-    def __init__(self, input_dim, hidden_dim, device):
+    def __init__(
+        self,
+        input_dim,
+        hidden_dim,
+        device,
+        layer_idx=0,
+        profiler=None,
+    ):
         super().__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
@@ -256,6 +293,10 @@ class CustomGRUCell(nn.Module):
         self.b_ih = nn.Parameter(torch.Tensor(3 * hidden_dim))
         self.b_hh = nn.Parameter(torch.Tensor(3 * hidden_dim))
         
+        self.layer_idx = layer_idx
+        self.profiler = profiler
+        self.gate_multiplier = 3
+        
         self.reset_parameters()
     
     def reset_parameters(self):
@@ -264,12 +305,12 @@ class CustomGRUCell(nn.Module):
             nn.init.uniform_(weight, -stdv, stdv)
     
     def forward(self, inputs, hx):
-        return GRUCellFunction.apply(inputs, hx, self.w_ih, self.w_hh, self.b_ih, self.b_hh)
+        return GRUCellFunction.apply(inputs, hx, self.w_ih, self.w_hh, self.b_ih, self.b_hh, self)
 
 
 class GRUCellFunction(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, input, hidden_state, w_ih, w_hh, b_ih, b_hh):
+    def forward(ctx, input, hidden_state, w_ih, w_hh, b_ih, b_hh, cell_ref):
         # Split the weight matrix and the bias vector
         w_ir, w_iz, w_in = w_ih.chunk(3, 0)
         w_hr, w_hz, w_hn = w_hh.chunk(3, 0)
@@ -296,6 +337,7 @@ class GRUCellFunction(torch.autograd.Function):
 
         ctx.save_for_backward(input, hidden_state, w_ir, w_iz, w_in, w_hr, w_hz, w_hn,
                               reset_gate, update_gate, n, b_ir, b_iz, b_in, b_hr, b_hz, b_hn)
+        ctx.cell_ref = cell_ref
         
         return hy
 
@@ -337,6 +379,14 @@ class GRUCellFunction(torch.autograd.Function):
         # Calculate the gradients of the weights
         start_calculate_gradients = time.time()
         
+        cell = ctx.cell_ref
+        
+        if cell.profiler is not None and cell.profiler.enabled:
+            cell.profiler.sync_if_cuda(input.device)
+            start_calculate_gradients = time.perf_counter()
+        else:
+            start_calculate_gradients = None
+        
         # Calculate the gradients of w_ih
         grad_w_ir = torch.mm(d_reset_gate.t(), input)
         grad_w_iz = torch.mm(d_update_gate.t(), input)
@@ -348,9 +398,19 @@ class GRUCellFunction(torch.autograd.Function):
         grad_w_hz = torch.mm(d_update_gate.t(), hidden_state)
         grad_w_hn = torch.mm((d_n_tanh * reset_gate).t(), hidden_state)
         grad_w_hh = torch.cat((grad_w_hr, grad_w_hz, grad_w_hn), dim=0)
+        
+        if cell.profiler is not None and cell.profiler.enabled:
+            cell.profiler.sync_if_cuda(input.device)
+            elapsed_ms = (time.perf_counter() - start_calculate_gradients) * 1000.0
 
-        end_calculate_gradients = time.time()
-        time_backward = end_calculate_gradients - start_calculate_gradients
+            cell.profiler.add_local_record(
+                layer_idx=cell.layer_idx,
+                input_dim=cell.input_dim,
+                hidden_dim=cell.hidden_dim,
+                gate_multiplier=cell.gate_multiplier,
+                batch_size=input.size(0),
+                elapsed_ms=elapsed_ms,
+            )
         
         # Calculate the gradients of b_ih
         grad_b_ir = d_reset_gate.sum(0)
@@ -364,4 +424,4 @@ class GRUCellFunction(torch.autograd.Function):
         grad_b_hn = (d_n_tanh * reset_gate).sum(0)
         grad_b_hh = torch.cat((grad_b_hr, grad_b_hz, grad_b_hn))
 
-        return d_input, d_hidden_state, grad_w_ih, grad_w_hh, grad_b_ih, grad_b_hh
+        return d_input, d_hidden_state, grad_w_ih, grad_w_hh, grad_b_ih, grad_b_hh, None

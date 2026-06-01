@@ -227,7 +227,7 @@ class Exp_text_classification(Exp_basic):
                         chunk_len = math.ceil(sequence_length / self.args.truncate_num)
                         chunk_len = max(1, chunk_len)
                         
-                    for start in range(0, sequence_length, chunk_len):
+                    for chunk_idx, start in enumerate(range(0, sequence_length, chunk_len)):
                         # cell0 = self.model.model.cells[0]
                         # print("before chunk:",
                         #     cell0.X_matrix_ih[0, 0].item(),
@@ -261,6 +261,18 @@ class Exp_text_classification(Exp_basic):
                             self.chunk_len = chunk_len
                             
                         optimizer.zero_grad()
+                        
+                        if hasattr(self.model.model, "set_profile_context"):
+                            self.model.model.set_profile_context(
+                                epoch=epoch_count,
+                                batch_idx=batch_count,
+                                chunk_idx=chunk_idx,
+                                model_name=self.args.model,
+                                data_name=self.args.data_name,
+                                sequence_length=sequence_length,
+                                chunk_length=chunk_T,
+                                batch_size=batch_size,
+                            )
                         
                         output, loss_mask, final_step_mask = self.model(
                             inputs=inputs,
@@ -349,6 +361,39 @@ class Exp_text_classification(Exp_basic):
                 )
                 
                 vali_av_loss, vali_acc = self.validate(vali_loader, vali_loss_path)
+
+                if hasattr(self.model.model, "sptt_profiler") and self.model.model.sptt_profiler is not None:
+                    profiler = self.model.model.sptt_profiler
+                    profiler.set_num_epochs_for_estimate(num_epochs=self.args.epochs)
+                elif hasattr(self.model.model, "bptt_profiler") and self.model.model.bptt_profiler is not None:
+                    profiler = self.model.model.bptt_profiler
+                    profiler.set_num_epochs_for_estimate(num_epochs=self.args.epochs)
+                else:
+                    raise Warning("No profiler found, 不执行")
+                
+                
+                
+                metric_dir = (
+                    Path("compute_metrics")
+                    / self.args.exp_type
+                    / str(self.args.fixed_length)
+                    / self.args.model
+                    / self.args.data_name
+                    / f"seed_{self.args.seed}"
+                    / f"krank_{self.args.krank}_Trun_{self.args.truncate_num}_Slide_{self.args.slide_window_nums}"
+                )
+                metric_dir.mkdir(parents=True, exist_ok=True)
+                
+                if self.args.model in {"SpttLSTM", "SpttGRU", "SpttLSTM_End", "SpttGRU_End"} and self.args.profile_sptt_compute:
+                    # profiler.save_csv(metric_dir / "sptt_compute_raw.csv")
+                    # profiler.save_complete_gradient_summary(metric_dir / "sptt_complete_gradient_summary.csv")
+                    profiler.save_epoch_summary(metric_dir / "sptt_compute_epoch_summary.csv")
+                elif self.args.model in {"BpttLSTM", "BpttGRU"} and self.args.profile_bptt_compute:
+                    # profiler.save_csv(metric_dir / "bptt_compute_raw.csv")
+                    # profiler.save_complete_gradient_summary(metric_dir / "bptt_complete_gradient_summary.csv")
+                    profiler.save_epoch_summary(metric_dir / "bptt_compute_epoch_summary.csv")
+                else:
+                    print("Don't save epoch summary")
             
                 self.file_logger.info(f"-----Epoch {epoch_count}, Average Loss: {avg_loss:.4f}, Train Accuracy: {epoch_acc:.4f}, Validation Accuracy: {vali_acc:.4f} -------")
             
@@ -367,7 +412,7 @@ class Exp_text_classification(Exp_basic):
                     
                     self.file_logger.info(f"Early stopping at epoch {epoch_count}. Best validation loss: {early_stopping.val_loss_min:.4f}")
                     break
-        
+    
         return checkpoint_path, test_loader, num_chunks
     
     def validate(self, vali_loader, vali_loss_csv_file):
