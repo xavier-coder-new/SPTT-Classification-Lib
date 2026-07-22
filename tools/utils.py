@@ -10,8 +10,23 @@ import matplotlib.pyplot as plt
 
 def _setup_logger(save_dir: str, args:argparse.Namespace, use_rich: bool = True):
     # Pa_Ep:{args.patience}_{args.max}_LR_{args.rate}_T_{args.truncate}_off_{str(args.off)}
-    full_log_path = (Path(save_dir) / args.exp_type / args.model / args.data_name / str(args.seed) / f"Epoch-{args.epochs}_Patience-{args.patience}"
-                     / f"krank_{args.krank}_Trun_num_{args.truncate_num}_Slide_{args.slide_window_nums}" )
+    # full_log_path = (Path(save_dir) / args.exp_type / args.model / args.data_name / str(args.seed) / f"Epoch-{args.epochs}_Patience-{args.patience}"
+    #                  / f"krank_{args.krank}_Trun_num_{args.truncate_num}_Slide_{args.slide_window_nums}" )
+    
+    if args.use_clip:
+        clip_norm = args.clip_norm
+    else:
+        clip_norm = "None"
+        
+    if args.bptt_low_rank:
+        low_rank = f"_Bptt_LowRank_Using"
+    else:
+        low_rank = "_Bptt_LowRank_None"
+    
+    
+    full_log_path = (Path(save_dir) / args.exp_type / args.model / args.data_name / f'clip_norm_{clip_norm}' / str(args.seed) / f"Epoch-{args.epochs}_Patience-{args.patience}"
+                     / f"{low_rank}_krank_{args.krank}_Trun_num_{args.truncate_num}_Slide_{args.slide_window_nums}" )
+    
     full_log_path.mkdir(parents=True, exist_ok=True)
     
     file_logger = logging.getLogger(f"{args.model}_{args.data_name}_seed{args.seed}__FILE")

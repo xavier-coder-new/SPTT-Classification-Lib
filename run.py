@@ -53,9 +53,11 @@ if __name__ == '__main__':
     parser.add_argument("--offline", action="store_true", help="whether to use offline data loading")
     parser.add_argument("--to_grayscale", action="store_true", help="whether to convert image to grayscale")
     parser.add_argument("--normalize", action="store_true", help="whether to normalize the data")
-    parser.add_argument("--gradient_clip", action="store_true", help="whether to use gradient clipping")
     parser.add_argument("--profile_sptt_compute", action="store_true", help="whether to profile the compute time of SPTT")
     parser.add_argument("--profile_bptt_compute", action="store_true", help="whether to profile the compute time of BPTT")
+    parser.add_argument('--use_clip', action='store_true', help='whether to use gradient clipping for BPTT models')
+    parser.add_argument('--clip_norm', type=float, default=1.0, help='max norm for gradient clipping')
+    parser.add_argument('--bptt_low_rank', action='store_true', help='whether to use low-rank approximation for BPTT models')
     
     
     args = parser.parse_args()
@@ -67,7 +69,11 @@ if __name__ == '__main__':
     
     torch.set_num_threads(args.threads)
     set_seed(args.seed)
-    print("******Whether to use gradient clipping:*******", args.gradient_clip)
+
+    if args.use_clip:
+        print(f"Using gradient clipping with max norm: {args.clip_norm}")
+    else:
+        print("Not using gradient clipping")
     
     if args.exp_type == "text":
         args.input_type = "text"
@@ -103,6 +109,12 @@ if __name__ == '__main__':
         print(f"Truncation enabled, the truncation number is {args.truncate_num}")
 
     print(f">>>>>>>start experiment : {args.model} on {args.data_name} with seed {args.seed}-Epochs-{args.epochs}-Patience-{args.patience}<<<<<")
+    
+    best_model_path, test_loader, num_chunks = exp.train()
+    
+    print(f">>>>>>>start testing : {args.model} on {args.data_name} with seed {args.seed}-Epochs-{args.epochs}-Patience-{args.patience}<<<<<")
+    
+    exp.test(best_model_path, test_loader, num_chunks)
 
     if args.gpu_type == 'mps':
         torch.backends.mps.empty_cache()

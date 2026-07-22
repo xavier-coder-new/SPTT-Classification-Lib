@@ -63,6 +63,16 @@ We also provide a dedicated script to visualize the profiled runtime and FLOPs m
 ./scripts/plot_time.sh
 ```
 
+## Ablation
+
+To investigate whether the performance gains of SPTT stem solely from implicit regularization, we provide ablation experiments for gradient clipping and low-rank BPTT. Specifically, the low-rank BPTT approach first computes the full gradient normally and then applies low-rank decomposition to the complete gradient for parameter updates.
+
+To enable gradient clipping, please use the --use_clip flag and specify the --clip_norm value. To apply low-rank decomposition to the BPTT gradient, please use the --bptt_low_rank flag. We have provided a sample run script that you can execute directly as follows:
+
+```bash
+./scripts/image_classification/total_gradient.sh 
+```
+
 ## Key Parameter Configurations
 
 - **Sequence Truncation:** The dataset supports both full and truncated sequence processing. To process the complete sequence, set `truncate_num=1`. To evaluate TBPTT or SPTT-Window, set `truncate_num` to your desired time-chunk size.

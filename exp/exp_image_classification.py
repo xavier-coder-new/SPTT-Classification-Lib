@@ -16,6 +16,48 @@ import pandas as pd
 import os
 from icecream import ic
 
+def is_sptt_matrix(name):
+    """Match the W_ih and W_hh matrices treated by SPTT."""
+    name = name.lower()
+    return 'w_ih' in name or 'w_hh' in name
+
+@torch.no_grad()
+def bptt_low_rank(model, rank):
+    """Project full BPTT gradients of W_ih and W_hh to exact rank-k."""
+    if rank <= 0:
+        raise ValueError(f"rank must be positive, got {rank}")
+
+    projected = 0
+
+    for name, param in model.named_parameters():
+        if param.grad is None or param.grad.ndim != 2:
+            continue
+
+        if not is_sptt_matrix(name):
+            continue
+
+        grad = param.grad
+
+        if not torch.isfinite(grad).all():
+            raise FloatingPointError(
+                f"Non-finite gradient before SVD projection: {name}"
+            )
+
+        U, S, Vh = torch.linalg.svd(grad.float(), full_matrices=False)
+        k = min(rank, S.numel())
+
+        grad_rank_k = (
+            U[:, :k] * S[:k].unsqueeze(0)
+        ) @ Vh[:k, :]
+
+        grad.copy_(grad_rank_k.to(dtype=grad.dtype))
+        projected += 1
+
+    if projected == 0:
+        raise RuntimeError(
+            "No W_ih or W_hh gradient was found for BPTT SVD projection."
+        )
+
 class Exp_image_classification(Exp_basic):
     def __init__(self, args, device):
         # the basice class has initialized the self.args
@@ -274,6 +316,13 @@ class Exp_image_classification(Exp_basic):
                         if loss_mask.any():
                             loss = self.criterion(output[loss_mask], batch_y[loss_mask])
                             loss.backward()
+                            
+                            if self.args.use_clip:
+                                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.args.clip_norm)
+                                
+                            if self.args.bptt_low_rank:
+                                bptt_low_rank(model=self.model, rank=self.args.krank)
+                    
                             optimizer.step()
 
                             sequence_loss += loss.item()
