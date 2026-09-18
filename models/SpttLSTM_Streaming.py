@@ -1,22 +1,27 @@
+"""SPTT LSTM with one-block streaming compression;"""
+
 import torch
 import torch.nn as nn
 import math
 from tools.Timers import Timers
 import time
-from tools.GradientAccumulator_Hybrid_LSTM import GradientAccumulator
 from icecream import ic
 from tools.sptt_compute_profiler import SPTTComputeProfiler
-from global_param import global_vars
 
 timers = Timers()
 
 def qr_with_non_negative_diagonal(matrix):
+    # 进行QR分解
     Q, R = torch.linalg.qr(matrix)
     
+    # 获取 R 矩阵对角线元素的符号
     diagonal_sign = torch.sign(torch.diag(R))
-
+    
+    # 避免对角线元素为零的情况
     diagonal_sign[diagonal_sign == 0] = 1
-
+    # ic(diagonal_sign)
+    
+    # 调整 Q 矩阵的列符号和Q = Q * diagonal_sign得到的结果一样。
     Q1 = Q * diagonal_sign.unsqueeze(0)
     
     R = diagonal_sign.unsqueeze(1) * R
@@ -27,10 +32,63 @@ def QR_matrix(X_matrix, target_shape):
     Q, R, diagonal_sign = qr_with_non_negative_diagonal(X_matrix)
     
     if Q.shape != target_shape:
+        # 进入这个会出现nan数值错误
         raise ValueError(f"QR shape mismatch: got {Q.shape}, expected {target_shape}")
 
     return Q, R, diagonal_sign
     
+
+class StreamingGradientAccumulator:
+    """Keep one compression block, in backward-arrival order.
+
+    The callback must consume its views synchronously and must not retain them:
+    the backing buffers are reused for the next block. Partial final blocks are
+    ignored to match SpttLSTM's T // block_size loop exactly.
+    """
+
+    def __init__(self, compress_block):
+        self.compress_block = compress_block
+        self.reset()
+
+    def reset(self, total_rows=0, slide_window_nums=1):
+        if total_rows < 0 or slide_window_nums < 1:
+            raise ValueError("total_rows must be >= 0 and slide_window_nums >= 1")
+        self.total_rows = int(total_rows)
+        self.block_size = max(1, self.total_rows // slide_window_nums)
+        self.rows_to_compress = self.total_rows // self.block_size * self.block_size
+        self.length = 0
+        self.filled = 0
+        self.processed_blocks = 0
+        self.buffers = None
+
+    @torch.no_grad()
+    def accumulate(self, inputs, hx, delta):
+        rows = inputs.size(0)
+        if hx.size(0) != rows or delta.size(0) != rows:
+            raise ValueError("inputs, hx and delta must have the same row count")
+        if self.length + rows > self.total_rows:
+            raise RuntimeError("Too many backward rows: call reset_sptt_state(actual_length) "
+                               "before each chunk; repeated backward is unsupported")
+        # Only the full blocks participate in the original low-rank update.
+        useful_rows = min(rows, max(0, self.rows_to_compress - self.length))
+        if useful_rows and self.buffers is None:
+            self.buffers = tuple(v.new_empty((self.block_size, v.size(1)))
+                                 for v in (inputs, hx, delta))
+        offset = 0
+        while offset < useful_rows:
+            count = min(self.block_size - self.filled, useful_rows - offset)
+            for buffer, value in zip(self.buffers, (inputs, hx, delta)):
+                buffer[self.filled:self.filled + count].copy_(value[offset:offset + count])
+            self.filled += count
+            offset += count
+            if self.filled == self.block_size:
+                self.processed_blocks += 1
+                self.compress_block(*self.buffers, self.processed_blocks)
+                self.filled = 0
+        self.length += rows
+        if self.length == self.total_rows:
+            self.buffers = None
+
 
 class Model(nn.Module):
     def __init__(self, args):
@@ -153,8 +211,12 @@ class Model(nn.Module):
             self.finished_mask[newly_finished] = True
             effective_logits[newly_finished] = output[newly_finished]
         
+        # 当前 chunk 应该参与 loss 的样本：
+        # 1) 之前没结束的样本（包括当前 newly_finished）
+        # 2) 已经在更早 chunk 结束的样本不再参与
         loss_mask = ~prev_finished_mask
         
+        # 当前 chunk 内哪些样本到达了最终有效位置
         final_step_mask = ended_in_chunk
         
         return effective_logits, loss_mask, final_step_mask
@@ -357,7 +419,7 @@ class CustomLSTMCell(nn.Module):
         self.reset_parameters()
         
         self.init_sptt_parameters()
-        self.accumulator = GradientAccumulator()
+        self.accumulator = StreamingGradientAccumulator(self._compress_block)
         self.reset_runtime_state(total_time_block_size=0)
     
     def reset_parameters(self):
@@ -368,16 +430,19 @@ class CustomLSTMCell(nn.Module):
     def init_sptt_parameters(self):
         self.X_matrix_ih = torch.randn(self.input_dim, self.krank).to(self.device)
         self.Sigma_ih = torch.randn(self.krank).to(self.device)
+        # self.Sigma_ih = torch.tensor([1e-5]*self.krank).to(self.device)
         self.Sigma_matrix_ih = torch.diag(self.Sigma_ih).to(self.device)
         self.Delta_matrix_ih = torch.randn(4 * self.hidden_dim, self.krank).to(self.device)
         
         self.X_matrix_hh = torch.randn(self.hidden_dim, self.krank).to(self.device)
         self.Sigma_hh = torch.randn(self.krank).to(self.device)
+        # self.Sigma_hh = torch.tensor([1e-5]*self.krank).to(self.device)
         self.Sigma_matrix_hh = torch.diag(self.Sigma_hh).to(self.device)
         self.Delta_matrix_hh = torch.randn(4 * self.hidden_dim, self.krank).to(self.device)
     
     def reset_runtime_state(self, total_time_block_size: int):
-        self.accumulator.reset()
+        self.accumulator.reset(int(total_time_block_size), self.slide_window_nums)
+        self._sptt_elapsed_ms = 0.0
         self.flag = True
         self.compression_finished = False
         self.total_time_block_size = int(total_time_block_size)
@@ -418,6 +483,98 @@ class CustomLSTMCell(nn.Module):
         self.Sigma_matrix_hh = Sigma_matrix_hh
         self.Delta_matrix_hh = Delta_matrix_hh
     
+    @torch.no_grad()
+    def _compress_block(self, activation_input, activation_hx, delta_block, i):
+        """Original SpttLSTM block equations, executed as soon as a block fills."""
+        device = activation_input.device
+        profiling = self.profiler is not None and self.profiler.enabled
+        if profiling:
+            self.profiler.sync_if_cuda(device)
+            started = time.perf_counter()
+        block_len = activation_input.size(0)
+        X_matrix_ih = self.X_matrix_ih
+        Sigma_ih = self.Sigma_ih
+        Sigma_matrix_ih = self.Sigma_matrix_ih
+        Delta_matrix_ih = self.Delta_matrix_ih
+
+        X_matrix_hh = self.X_matrix_hh
+        Sigma_hh = self.Sigma_hh
+        Sigma_matrix_hh = self.Sigma_matrix_hh
+        Delta_matrix_hh = self.Delta_matrix_hh
+
+        inv_Sigma_matrix_ih = torch.inverse(Sigma_matrix_ih)
+        inv_Sigma_matrix_hh = torch.inverse(Sigma_matrix_hh)
+
+
+        scale_factor_right_ih = delta_block @ Delta_matrix_ih / block_len
+        scale_factor_left_ih = activation_input @ X_matrix_ih / block_len
+
+        scale_factor_right_hh = delta_block @ Delta_matrix_hh / block_len
+        scale_factor_left_hh = activation_hx @ X_matrix_hh / block_len
+
+        # 使用预计算的系数提高效率
+        i_factor = i / (i + 1)
+        update_factor = 1 / (i + 1)
+
+        # 更新X和Delta矩阵
+        X_ih_update = activation_input.t() @ scale_factor_right_ih @ inv_Sigma_matrix_ih
+        X_matrix_ih = i_factor * X_matrix_ih + update_factor * X_ih_update
+
+        Delta_ih_update = delta_block.t() @ scale_factor_left_ih @ inv_Sigma_matrix_ih
+        Delta_matrix_ih = i_factor * Delta_matrix_ih + update_factor * Delta_ih_update
+
+        X_hh_update = activation_hx.t() @ scale_factor_right_hh @ inv_Sigma_matrix_hh
+        X_matrix_hh = i_factor * X_matrix_hh + update_factor * X_hh_update
+
+        Delta_hh_update = delta_block.t() @ scale_factor_left_hh @ inv_Sigma_matrix_hh
+        Delta_matrix_hh = i_factor * Delta_matrix_hh + update_factor * Delta_hh_update
+
+        X_matrix_ih, _, Sigma_ih_signal_X = QR_matrix(X_matrix_ih, X_matrix_ih.shape)
+        Delta_matrix_ih, _, Sigma_ih_signal_Delta = QR_matrix(Delta_matrix_ih, Delta_matrix_ih.shape)
+        align_ih = Sigma_ih_signal_X * Sigma_ih_signal_Delta
+        Delta_matrix_ih = Delta_matrix_ih * align_ih.unsqueeze(0)
+
+        X_matrix_hh, _, Sigma_hh_signal_X = QR_matrix(X_matrix_hh, X_matrix_hh.shape)
+        Delta_matrix_hh, _, Sigma_hh_signal_Delta = QR_matrix(Delta_matrix_hh, Delta_matrix_hh.shape)
+        align_hh = Sigma_hh_signal_X * Sigma_hh_signal_Delta
+        Delta_matrix_hh = Delta_matrix_hh * align_hh.unsqueeze(0)
+
+        # 批量计算Sigma更新 ((i + 1) * t)
+        Sigma_ih_product = torch.sum(((delta_block @ Delta_matrix_ih) * (activation_input @ X_matrix_ih)) / (block_len), dim=0)
+        Sigma_ih = i_factor * Sigma_ih + update_factor * Sigma_ih_product
+
+        Sigma_hh_product = torch.sum(((delta_block @ Delta_matrix_hh) * (activation_hx @ X_matrix_hh)) / (block_len), dim=0)
+        Sigma_hh = i_factor * Sigma_hh + update_factor * Sigma_hh_product
+
+        # # XXX:
+        # Sigma_ih = torch.where(Sigma_ih == 0, torch.ones_like(Sigma_ih), Sigma_ih)
+        # Sigma_hh = torch.where(Sigma_hh == 0, torch.ones_like(Sigma_hh), Sigma_hh)
+
+        # # XXX：
+        # Sigma_ih = torch.nan_to_num(Sigma_ih, nan=1.0)
+        # Sigma_hh = torch.nan_to_num(Sigma_hh, nan=1.0)
+
+        # 在计算完成后、更新梯度前应用对数缩放
+        Sigma_matrix_ih = torch.diag(Sigma_ih)
+        Sigma_matrix_hh = torch.diag(Sigma_hh)
+
+
+        self.set_sptt_state(
+            flag=self.flag,
+            compression_finished=self.compression_finished,
+            X_matrix_ih=X_matrix_ih,
+            Sigma_ih=Sigma_ih,
+            Sigma_matrix_ih=Sigma_matrix_ih,
+            Delta_matrix_ih=Delta_matrix_ih,
+            X_matrix_hh=X_matrix_hh,
+            Sigma_hh=Sigma_hh,
+            Sigma_matrix_hh=Sigma_matrix_hh,
+            Delta_matrix_hh=Delta_matrix_hh,
+        )
+        if profiling:
+            self.profiler.sync_if_cuda(device)
+            self._sptt_elapsed_ms += (time.perf_counter() - started) * 1000.0
+
     def forward(self, inputs, hx, cx, valid_mask):
         return LSTMCellFunction.apply(
             inputs, hx, cx, 
@@ -460,7 +617,8 @@ class LSTMCellFunction(torch.autograd.Function):
          w_ih, w_hh, b_ih, b_hh, valid_mask) = ctx.saved_tensors
         
         cell = ctx.cell_ref
-
+        
+        # 初始化梯度
         grad_inputs = grad_hx = grad_cx = grad_w_ih = grad_w_hh = grad_b_ih = grad_b_hh = None
         
 
@@ -472,154 +630,50 @@ class LSTMCellFunction(torch.autograd.Function):
         
         delta = torch.cat((grad_ingate, grad_forgetgate, grad_cellgate, grad_outgate), dim=1)
             
+        # 计算输入和隐藏状态的梯度
         grad_inputs = torch.mm(delta, w_ih)
         grad_hx = torch.mm(delta, w_hh)
         grad_cx = grad_cy_total * forgetgate
             
+        # 计算偏置的梯度
         grad_b_ih = delta.sum(0)
         grad_b_hh = delta.sum(0)
         
+        # 只累积有效样本
         if valid_mask.any():
             valid_inputs = inputs[valid_mask]
             valid_hx = hx[valid_mask]
             valid_delta = delta[valid_mask]
             cell.accumulator.accumulate(valid_inputs, valid_hx, valid_delta)
         
-        # print(f"Accumulator length: {cell.accumulator.length}")
-        # print(f"total_time_block_size: {cell.total_time_block_size}")
-        
-        if cell.accumulator.length >= cell.total_time_block_size and not cell.compression_finished:
+        if cell.accumulator.length == cell.total_time_block_size and cell.flag:
             cell.compression_finished = True
-            
-        if not cell.compression_finished:
-            grad_w_ih = torch.zeros_like(w_ih)
-            grad_w_hh = torch.zeros_like(w_hh)
-        elif cell.compression_finished and cell.flag:
-            # cell.sptt_update_count += 1
-            # print(f"Sptt update count: {cell.sptt_update_count}")
             cell.flag = False
-            input_cat, hx_cat, delta_cat = cell.accumulator.get_concatenated_gradients()
-            
-            if input_cat is None:
-                raise ValueError("input_cat is None")
-            
-            T = input_cat.size(0)
-            t = max(1, T // cell.slide_window_nums)
-            
-            if not global_vars.inherit_sptt:
-                cell.init_sptt_parameters()
-            
-            X_matrix_ih = cell.X_matrix_ih
-            Sigma_ih = cell.Sigma_ih
-            Sigma_matrix_ih = cell.Sigma_matrix_ih
-            Delta_matrix_ih = cell.Delta_matrix_ih
-            
-            X_matrix_hh = cell.X_matrix_hh
-            Sigma_hh = cell.Sigma_hh
-            Sigma_matrix_hh = cell.Sigma_matrix_hh
-            Delta_matrix_hh = cell.Delta_matrix_hh
-            
-            inv_Sigma_matrix_ih = torch.inverse(Sigma_matrix_ih)
-            inv_Sigma_matrix_hh = torch.inverse(Sigma_matrix_hh)
-            
-            device = input_cat.device
-
-            if cell.profiler is not None and cell.profiler.enabled:
-                cell.profiler.sync_if_cuda(device)
-                start_sptt_compute = time.perf_counter()
+            if cell.total_time_block_size == 0:
+                # No valid rows: avoid the original empty-concatenation exception.
+                grad_w_ih = torch.zeros_like(w_ih)
+                grad_w_hh = torch.zeros_like(w_hh)
             else:
-                start_sptt_compute = None
-                
-            with torch.no_grad():
-                num_blocks = T // t
-                for i in range(1, num_blocks + 1):
-                    start_idx = (i - 1) * t
-                    end_idx = min(i * t, T)
-                    activation_input = input_cat[start_idx:end_idx]
-                    activation_hx = hx_cat[start_idx:end_idx]
-                    delta_block = delta_cat[start_idx:end_idx]
-                    
-                    block_len = activation_input.size(0)
-                    if block_len == 0:
-                        raise ValueError("block_len is 0")
-                                        
-                    scale_factor_right_ih = delta_block @ Delta_matrix_ih / block_len
-                    scale_factor_left_ih = activation_input @ X_matrix_ih / block_len
+                profiling = cell.profiler is not None and cell.profiler.enabled
+                if profiling:
+                    cell.profiler.sync_if_cuda(inputs.device)
+                    started = time.perf_counter()
+                grad_w_ih = (cell.X_matrix_ih @ cell.Sigma_matrix_ih @ cell.Delta_matrix_ih.t()).t()
+                grad_w_hh = (cell.X_matrix_hh @ cell.Sigma_matrix_hh @ cell.Delta_matrix_hh.t()).t()
+                if profiling:
+                    cell.profiler.sync_if_cuda(inputs.device)
+                    cell._sptt_elapsed_ms += (time.perf_counter() - started) * 1000.0
+                    cell.profiler.add_local_record(
+                        layer_idx=cell.layer_idx,
+                        input_dim=cell.input_dim,
+                        hidden_dim=cell.hidden_dim,
+                        gate_multiplier=cell.gate_multiplier,
+                        rank_k=cell.krank,
+                        block_len_total=cell.total_time_block_size,
+                        slide_window_nums=cell.slide_window_nums,
+                        elapsed_ms=cell._sptt_elapsed_ms,
+                    )
+        # Other nodes return None for weights: no per-time-step zero allocation.
+        # Inputs, hidden states and biases always use the original exact backward.
 
-                    scale_factor_right_hh = delta_block @ Delta_matrix_hh / block_len
-                    scale_factor_left_hh = activation_hx @ X_matrix_hh / block_len
-                    
-                    i_factor = i / (i + 1)
-                    update_factor = 1 / (i + 1)
-
-                    X_ih_update = activation_input.t() @ scale_factor_right_ih @ inv_Sigma_matrix_ih
-                    X_matrix_ih = i_factor * X_matrix_ih + update_factor * X_ih_update
-
-                    Delta_ih_update = delta_block.t() @ scale_factor_left_ih @ inv_Sigma_matrix_ih
-                    Delta_matrix_ih = i_factor * Delta_matrix_ih + update_factor * Delta_ih_update
-
-                    X_hh_update = activation_hx.t() @ scale_factor_right_hh @ inv_Sigma_matrix_hh
-                    X_matrix_hh = i_factor * X_matrix_hh + update_factor * X_hh_update
-
-                    Delta_hh_update = delta_block.t() @ scale_factor_left_hh @ inv_Sigma_matrix_hh
-                    Delta_matrix_hh = i_factor * Delta_matrix_hh + update_factor * Delta_hh_update
-
-                    X_matrix_ih, _, Sigma_ih_signal_X = QR_matrix(X_matrix_ih, X_matrix_ih.shape)
-                    Delta_matrix_ih, _, Sigma_ih_signal_Delta = QR_matrix(Delta_matrix_ih, Delta_matrix_ih.shape)
-                    align_ih = Sigma_ih_signal_X * Sigma_ih_signal_Delta
-                    Delta_matrix_ih = Delta_matrix_ih * align_ih.unsqueeze(0)
-
-                    X_matrix_hh, _, Sigma_hh_signal_X = QR_matrix(X_matrix_hh, X_matrix_hh.shape)
-                    Delta_matrix_hh, _, Sigma_hh_signal_Delta = QR_matrix(Delta_matrix_hh, Delta_matrix_hh.shape)
-                    align_hh = Sigma_hh_signal_X * Sigma_hh_signal_Delta
-                    Delta_matrix_hh = Delta_matrix_hh * align_hh.unsqueeze(0)
-
-                    Sigma_ih_product = torch.sum(((delta_block @ Delta_matrix_ih) * (activation_input @ X_matrix_ih)) / (block_len), dim=0)
-                    Sigma_ih = i_factor * Sigma_ih + update_factor * Sigma_ih_product
-                    
-                    Sigma_hh_product = torch.sum(((delta_block @ Delta_matrix_hh) * (activation_hx @ X_matrix_hh)) / (block_len), dim=0)
-                    Sigma_hh = i_factor * Sigma_hh + update_factor * Sigma_hh_product
-                    
-                    Sigma_matrix_ih = torch.diag(Sigma_ih)
-                    Sigma_matrix_hh = torch.diag(Sigma_hh)
-                    
-                    inv_Sigma_matrix_ih = torch.inverse(Sigma_matrix_ih)
-                    inv_Sigma_matrix_hh = torch.inverse(Sigma_matrix_hh)
-            
-            grad_w_ih = (X_matrix_ih @ Sigma_matrix_ih @ Delta_matrix_ih.t()).t()
-            grad_w_hh = (X_matrix_hh @ Sigma_matrix_hh @ Delta_matrix_hh.t()).t()
-            
-
-            if cell.profiler is not None and cell.profiler.enabled:
-                cell.profiler.sync_if_cuda(device)
-                elapsed_ms = (time.perf_counter() - start_sptt_compute) * 1000.0
-
-                cell.profiler.add_local_record(
-                    layer_idx=cell.layer_idx,
-                    input_dim=cell.input_dim,
-                    hidden_dim=cell.hidden_dim,
-                    gate_multiplier=cell.gate_multiplier,
-                    rank_k=cell.krank,
-                    block_len_total=T,
-                    slide_window_nums=cell.slide_window_nums,
-                    elapsed_ms=elapsed_ms,
-                )
-                
-            cell.set_sptt_state(
-                flag=cell.flag,
-                compression_finished=cell.compression_finished,
-                X_matrix_ih=X_matrix_ih,
-                Sigma_ih=Sigma_ih,
-                Sigma_matrix_ih=Sigma_matrix_ih,
-                Delta_matrix_ih=Delta_matrix_ih,
-                X_matrix_hh=X_matrix_hh,
-                Sigma_hh=Sigma_hh,
-                Sigma_matrix_hh=Sigma_matrix_hh,
-                Delta_matrix_hh=Delta_matrix_hh,
-            )
-        
-        else:
-            grad_w_ih = torch.zeros_like(w_ih)
-            grad_w_hh = torch.zeros_like(w_hh)
-        
         return grad_inputs, grad_hx, grad_cx, grad_w_ih, grad_w_hh, grad_b_ih, grad_b_hh, None, None

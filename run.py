@@ -6,6 +6,7 @@ from global_param import global_vars
 from tools.utils import set_seed
 from exp.exp_image_classification import Exp_image_classification
 from exp.exp_text_classification import Exp_text_classification
+from icecream import ic
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='SPTT and BPTT for classification')
@@ -58,11 +59,23 @@ if __name__ == '__main__':
     parser.add_argument('--use_clip', action='store_true', help='whether to use gradient clipping for BPTT models')
     parser.add_argument('--clip_norm', type=float, default=1.0, help='max norm for gradient clipping')
     parser.add_argument('--bptt_low_rank', action='store_true', help='whether to use low-rank approximation for BPTT models')
+    parser.add_argument('--inherit_sptt', type=float, default=1.0, help='whether to inherit SPTT parameters')
+    parser.add_argument('--inherit_bptt', type=float, default=0.0, help='whether to inherit BPTT parameters') 
     
     
     args = parser.parse_args()
 
     global_vars.krank = args.krank
+    global_vars.inherit_sptt = args.inherit_sptt
+    global_vars.inherit_bptt = args.inherit_bptt
+    
+    print("globa_vars.inherit_sptt:", global_vars.inherit_sptt)
+    print("globa_vars.inherit_bptt:", global_vars.inherit_bptt)
+    
+    if not args.inherit_sptt:
+        assert args.inherit_sptt == 0.0, "inherit_sptt should be 0.0 when not inheriting SPTT parameters"
+        print("Not inheriting SPTT parameters, inherit_sptt is set to 0.0")
+        
 
     print("******SPTT Compute Profiling:*******", args.profile_sptt_compute)
     print("******BPTT Compute Profiling:*******", args.profile_bptt_compute)
@@ -74,6 +87,11 @@ if __name__ == '__main__':
         print(f"Using gradient clipping with max norm: {args.clip_norm}")
     else:
         print("Not using gradient clipping")
+        
+    if args.bptt_low_rank:
+        ic("Using low-rank approximation for BPTT models")
+    else:
+        ic("Not using low-rank approximation for BPTT models")
     
     if args.exp_type == "text":
         args.input_type = "text"

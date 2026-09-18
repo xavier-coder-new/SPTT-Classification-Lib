@@ -1,6 +1,6 @@
 import torch
 import os
-from models import BpttGRU, BpttLSTM, SpttGRU, SpttLSTM, SpttGRU_End, SpttLSTM_End
+from models import BpttGRU, BpttLSTM, SpttGRU, SpttLSTM, SpttGRU_End, SpttLSTM_End, SpttLSTM_Streaming
 
 
 class Exp_basic:
@@ -13,6 +13,7 @@ class Exp_basic:
             'SpttGRU': SpttGRU,
             'SpttLSTM_End': SpttLSTM_End,
             'SpttGRU_End': SpttGRU_End,
+            'SpttLSTM_Streaming': SpttLSTM_Streaming
         }
         self.device = self._acquire_device()
         # self.model = self._build_model().to(self.device)

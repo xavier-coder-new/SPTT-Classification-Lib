@@ -22,7 +22,7 @@ class Exp_text_classification(Exp_basic):
         super().__init__(args)
         self.device = device
          
-    def _get_loader(self, data_name, path="./datasets"):
+    def _get_loader(self, data_name, path="/home/weihao/datasets"):
         data_loader = Data_Factory(path=Path(path), num_worker=self.args.num_worker)
         train_loader = data_loader.get_data_loader(
             data_name=data_name,
@@ -176,6 +176,9 @@ class Exp_text_classification(Exp_basic):
         
         early_stopping = Earlystopping(patience=self.args.patience, verbose=True)
         
+        all_e2e_time = []
+        all_peak_memory = []
+        
         for epoch in range(self.args.epochs):
             self.model.train()
             
@@ -187,6 +190,9 @@ class Exp_text_classification(Exp_basic):
             epoch_total_num = 0
             
             epoch_loss = []
+            
+            epoch_e2e_time = []
+            epoch_peak_memory = []
             
             # with tqdm(train_loader, desc=f"Epoch {epoch+1}/{self.args.epochs}", unit="batch") as tepoch:
             with training_progress.create_progress_bar("Training") as progress:
@@ -226,6 +232,12 @@ class Exp_text_classification(Exp_basic):
                         chunk_len = math.ceil(sequence_length / self.args.truncate_num)
                         chunk_len = max(1, chunk_len)
                         
+                    if self.device.type == "cuda":
+                        torch.cuda.synchronize(self.device)
+                        torch.cuda.reset_peak_memory_stats(self.device)
+
+                    e2e_start_time = time.perf_counter()
+                        
                     for chunk_idx, start in enumerate(range(0, sequence_length, chunk_len)):
                         end = min(start + chunk_len, sequence_length)
                         chunk_x = batch_x[:, start:end] # [batch_size, chunk_len]
@@ -242,7 +254,7 @@ class Exp_text_classification(Exp_basic):
                         # Which samples have just ended within the current chunk
                         end_in_chunked = (remaining_length > 0) & (remaining_length <= chunk_T) # [B]
                         
-                        if self.args.model in {"SpttLSTM", "SpttGRU", "SpttLSTM_End", "SpttGRU_End"}:
+                        if self.args.model in {"SpttLSTM", "SpttGRU", "SpttLSTM_End", "SpttGRU_End", "SpttLSTM_Streaming"}:
                             self.model.reset_sptt_state(chunk_actual_length)
                         
                         if first_train:
@@ -292,6 +304,45 @@ class Exp_text_classification(Exp_basic):
                         
                         self.model.model.detach_state()
                         
+                    ############ Record time and memory################
+                        
+                    if self.device.type == "cuda":
+                        torch.cuda.synchronize(self.device)
+
+                    e2e_elapsed_ms = (
+                        time.perf_counter() - e2e_start_time
+                    ) * 1000.0
+                    
+                    if self.device.type == "cuda":
+
+                        peak_memory_allocated_mb = (
+                            torch.cuda.max_memory_allocated(
+                                self.device
+                            )
+                            / (1024 ** 2)
+                        )
+
+                        peak_memory_reserved_mb = (
+                            torch.cuda.max_memory_reserved(
+                                self.device
+                            )
+                            / (1024 ** 2)
+                        )
+
+                    else:
+                        peak_memory_allocated_mb = float("nan")
+                        peak_memory_reserved_mb = float("nan")
+                    
+                    epoch_e2e_time.append(e2e_elapsed_ms)
+                    epoch_peak_memory.append(peak_memory_allocated_mb)
+                    avg_e2e_time = np.mean(epoch_e2e_time)
+                    avg_peak_memory = np.mean(epoch_peak_memory)
+                                        
+                    all_e2e_time.append(e2e_elapsed_ms)
+                    all_peak_memory.append(peak_memory_allocated_mb)
+                        
+                    ############ Record time and memory################    
+                        
                     if batch_final_logits is None:
                         batch_final_logits = output.detach()
                     else:
@@ -325,7 +376,10 @@ class Exp_text_classification(Exp_basic):
                             total_batches=len(train_loader)
                         )    
                         
-                    self.file_logger.info(f"Epoch {epoch_count}, Batch {batch_count}, Loss: {batch_loss:.4f}, Chunk_num: {num_chunks}, Chunk_length: {chunk_len}, Accuracy: {batch_acc:.4f}")       
+                    self.file_logger.info(f"Epoch {epoch_count}, Batch {batch_count}, Loss: {batch_loss:.4f}, \
+                                            Chunk_num: {num_chunks}, Chunk_length: {chunk_len}, Accuracy: {batch_acc:.4f}, \
+                                            avg_e2e_time:{avg_e2e_time}, avg_peak_memory: {avg_peak_memory}"
+                                        )        
 
                 train_loss_data = pd.DataFrame({
                     "train_loss": epoch_loss,
@@ -376,7 +430,7 @@ class Exp_text_classification(Exp_basic):
                 )
                 metric_dir.mkdir(parents=True, exist_ok=True)
                 
-                if self.args.model in {"SpttLSTM", "SpttGRU", "SpttLSTM_End", "SpttGRU_End"} and self.args.profile_sptt_compute:
+                if self.args.model in {"SpttLSTM", "SpttGRU", "SpttLSTM_End", "SpttGRU_End", "SpttLSTM_Streaming"} and self.args.profile_sptt_compute:
                     # profiler.save_csv(metric_dir / "sptt_compute_raw.csv")
                     # profiler.save_complete_gradient_summary(metric_dir / "sptt_complete_gradient_summary.csv")
                     profiler.save_epoch_summary(metric_dir / "sptt_compute_epoch_summary.csv")
@@ -402,9 +456,40 @@ class Exp_text_classification(Exp_basic):
                     vali_loss_pd = pd.read_csv(vali_loss_path)
                     visual_loss(vali_loss_pd['vali_loss'].tolist(), label="Validation Loss", name=visual_vali_loss)
                     
-                    self.file_logger.info(f"Early stopping at epoch {epoch_count}. Best validation loss: {early_stopping.val_loss_min:.4f}")
+                    avg_all_e2e_time = np.mean(all_e2e_time)
+                    std_all_e2e_time = np.std(all_e2e_time)
+                    sum_all_e2e_time = np.sum(all_e2e_time)
+                    
+                    avg_peak_memory = np.mean(all_peak_memory)
+                    std_peak_memory = np.std(all_peak_memory)
+                    max_peak_memory = np.max(all_peak_memory)
+                    
+                    all_e2e_time = []
+                    all_peak_memory = []
+                    
+                    self.file_logger.info(
+                        f"Early stopping at epoch {epoch_count}. Best validation loss: {early_stopping.val_loss_min:.4f}"
+                        f"Avg_per_e2e_time: {avg_all_e2e_time}, Std_per_e2e_time: {std_all_e2e_time}, Sum_e2e_time: {sum_all_e2e_time}"
+                        f"Avg_peak_memory: {avg_peak_memory}, Std_peak_memory: {std_peak_memory}, Max_peak_memory: {max_peak_memory}"
+                    )
                     break
-    
+
+        if all_e2e_time:
+            avg_all_e2e_time = np.mean(all_e2e_time)
+            std_all_e2e_time = np.std(all_e2e_time)
+            sum_all_e2e_time = np.sum(all_e2e_time)
+            
+            avg_peak_memory = np.mean(all_peak_memory)
+            std_peak_memory = np.std(all_peak_memory)
+            max_peak_memory = np.max(all_peak_memory)
+            
+            all_e2e_time = []
+            all_peak_memory = []
+            self.file_logger.info(
+                f"Avg_per_e2e_time: {avg_all_e2e_time}, Std_per_e2e_time: {std_all_e2e_time}, Sum_e2e_time: {sum_all_e2e_time}.\n"
+                f"Avg_peak_memory: {avg_peak_memory}, Std_peak_memory: {std_peak_memory}, Max_peak_memory: {max_peak_memory}"
+            )
+            
         return checkpoint_path, test_loader, num_chunks
     
     def validate(self, vali_loader, vali_loss_csv_file):

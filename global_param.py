@@ -8,6 +8,8 @@ class GlobalConfig:
     krank: int = 10
     device: str = 'cuda:0'
     slide_window_nums: int = 4
+    inherit_sptt: float = 1.0
+    inherit_bptt: float = 0.0
     
     _instance = None
     

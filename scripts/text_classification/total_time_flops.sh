@@ -2,7 +2,7 @@
 
 export CUDA_VISIBLE_DEVICES=0
 
-models=("SpttLSTMSpttLSTM_End")
+models=("SpttLSTM_Streaming")
 data_names=("ag_news")
 seeds=(2023)
 epochs=100
@@ -13,9 +13,9 @@ batch_size=256
 learning_rate=0.001
 num_layers=1
 krank=6
-slide_window_nums=1
+slide_window_nums=20
 max_length=1200
-fixed_lengths=(900 1000 1100 1200)
+fixed_lengths=(800 900 1000 1100 1200)
 
 for seed in "${seeds[@]}"; do
   for fixed_length in "${fixed_lengths[@]}"; do

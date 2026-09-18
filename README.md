@@ -73,6 +73,40 @@ To enable gradient clipping, please use the --use_clip flag and specify the --cl
 ./scripts/image_classification/total_gradient.sh 
 ```
 
+## Investigating Temporal Continuity
+
+To study how temporal continuity affects BPTT and SPTT, we add a controlled inheritance-switch experiment. Two flags, `--inherit_sptt` and `--inherit_bptt`, determine whether the current gradient of SPTT or BPTT is updated from the previous iteration’s gradient.
+
+The goal is to examine SPTT’s *non-inheritance* behavior and BPTT’s *inheritance* behavior:
+
+- For SPTT, set `inherit_sptt=0`. The three components that form the gradient—`X_matrix`, `Sigma_matrix`, and `Delta_matrix`—are then re-initialized from scratch at every backward pass.
+- For BPTT, set `inherit_bptt=1`. BPTT first uses the low-rank factorization from earlier experiments, then applies the same raw-average form as SPTT, combining gradient information from the previous iteration and the current one.
+
+See `exp_image_classification.py` for the implementation.
+
+Ready-to-run scripts:
+
+```bash
+# For BPTT
+./scripts/image_classification/total_bptt_inherit.sh
+# For SPTT
+./scripts/image_classification/total_sptt_inherit.sh
+```
+
+## End-to-End Statistics
+
+Building on the earlier kernel-isolated timing and FLOPs measurements for recurrent gradient computation, we further report end-to-end time and GPU memory for the different computation frameworks. See `exp_text_classification.py`.
+
+We also provide a memory-reuse variant of SPTT. In the original implementation (`SpttLSTM.py`), SPTT-Hybrid explicitly stores all activations and error signals and then slides over them, which inflates memory use. The reuse version keeps a fixed memory budget: once that budget is reached, the program performs one SPTT update and immediately frees the buffer. This substantially reduces peak memory. See `SpttLSTM_Streaming.py`.
+
+End-to-end statistics can be collected with:
+
+```bash
+./scripts/text_classification/total_time_flops.sh
+```
+
+🍔**Note:** you must specify the model name yourself. For `SpttLSTM_Streaming`, set `--slide_window_nums` to control the size of the reused memory partition. For `SpttLSTM`, this argument defaults to `1`.
+
 ## Key Parameter Configurations
 
 - **Sequence Truncation:** The dataset supports both full and truncated sequence processing. To process the complete sequence, set `truncate_num=1`. To evaluate TBPTT or SPTT-Window, set `truncate_num` to your desired time-chunk size.

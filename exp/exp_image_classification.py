@@ -15,6 +15,25 @@ import numpy as np
 import pandas as pd
 import os
 from icecream import ic
+from dataclasses import dataclass
+from global_param import global_vars
+
+@dataclass
+class BpttSVDParam:
+    U_ih: torch.Tensor = None
+    S_ih: torch.Tensor = None
+    Vh_ih: torch.Tensor = None
+    
+    U_hh: torch.Tensor = None
+    S_hh: torch.Tensor = None
+    Vh_hh: torch.Tensor = None
+    
+    pho: float = 0.5
+    
+    first_iteration: bool = True
+    
+cfg = BpttSVDParam()
+
 
 def is_sptt_matrix(name):
     """Match the W_ih and W_hh matrices treated by SPTT."""
@@ -46,12 +65,48 @@ def bptt_low_rank(model, rank):
         U, S, Vh = torch.linalg.svd(grad.float(), full_matrices=False)
         k = min(rank, S.numel())
 
-        grad_rank_k = (
-            U[:, :k] * S[:k].unsqueeze(0)
-        ) @ Vh[:k, :]
+        # grad_rank_k = (
+        #     U[:, :k] * S[:k].unsqueeze(0)
+        # ) @ Vh[:k, :]
+        if global_vars.inherit_bptt:
+            # ic("start to inherit BPTT parameters")
+            if cfg.first_iteration:
+                if 'w_ih' in name:
+                    cfg.U_ih = U[:, :k]
+                    cfg.S_ih = S[:k]
+                    cfg.Vh_ih = Vh[:k, :]
+                elif 'w_hh' in name:
+                    cfg.U_hh = U[:, :k]
+                    cfg.S_hh = S[:k]
+                    cfg.Vh_hh = Vh[:k, :]
+            else:
+                if 'w_ih' in name:
+                    cfg.U_ih = cfg.pho * cfg.U_ih + (1 - cfg.pho) * U[:, :k]
+                    cfg.S_ih = cfg.pho * cfg.S_ih + (1 - cfg.pho) * S[:k]
+                    cfg.Vh_ih = cfg.pho * cfg.Vh_ih + (1 - cfg.pho) * Vh[:k, :]
+                elif 'w_hh' in name:
+                    cfg.U_hh = cfg.pho * cfg.U_hh + (1 - cfg.pho) * U[:, :k]
+                    cfg.S_hh = cfg.pho * cfg.S_hh + (1 - cfg.pho) * S[:k]
+                    cfg.Vh_hh = cfg.pho * cfg.Vh_hh + (1 - cfg.pho) * Vh[:k, :]
+
+            if 'w_ih' in name:
+                grad_rank_k = (
+                    cfg.U_ih * cfg.S_ih.unsqueeze(0)
+                ) @ cfg.Vh_ih
+
+            elif 'w_hh' in name:
+                grad_rank_k = (
+                    cfg.U_hh * cfg.S_hh.unsqueeze(0)
+                ) @ cfg.Vh_hh
+        else:
+            grad_rank_k = (
+                U[:, :k] * S[:k].unsqueeze(0)
+            ) @ Vh[:k, :]
 
         grad.copy_(grad_rank_k.to(dtype=grad.dtype))
         projected += 1
+        
+    cfg.first_iteration = False
 
     if projected == 0:
         raise RuntimeError(
@@ -64,7 +119,7 @@ class Exp_image_classification(Exp_basic):
         super().__init__(args)
         self.device = device
     
-    def _get_loader(self, data_name, path="./datasets"):
+    def _get_loader(self, data_name, path="/home/weihao/datasets"):
         data_loader = Data_Factory(path=Path(path), num_worker=self.args.num_worker)
         if data_name in {"sequential_mnist", "cifar10"}:
             train_loader = data_loader.get_data_loader(
